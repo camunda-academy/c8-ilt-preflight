@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Layer 2 native trust probe (C#/.NET). Plan Phase 3, unit 3.3, tier 1.
+    Zero NuGet PackageReferences, deliberately: mirrors Java's Probe.java
+    (javax.net.ssl only) and every other language's tier-1 probe - this is the
+    mandatory, SDK-free trust check that must be able to run even if the real
+    Camunda SDK can't be fetched (e.g. a broken corporate NuGet mirror).
+
+    TargetFramework is net9.0: this dev machine has only the .NET 9 SDK/runtime
+    installed (confirmed via the "dotnet list-runtimes" command during this
+    unit's implementation, no net8.0 runtime present), so net9.0 is what could
+    actually be built AND executed here for live verification. The real
+    Camunda C# SDK's own minimum is net8.0 (verified against its NuGet
+    dependency-group metadata and README): a net8.0 class library is
+    forward-compatible with a net9.0-targeted app, so SdkProbe.csproj (which
+    DOES reference the SDK) builds fine against this TFM too. If you're running
+    this on a machine with only the .NET 8 SDK/runtime installed, change
+    TargetFramework to net8.0 in both Probe.csproj and SdkProbe.csproj.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>Probe</AssemblyName>
+    <RootNamespace>CamundaPreflight.Probe</RootNamespace>
+    <!-- Keep build noise (restore/compile messages) off this probe's own
+         stdout: run.sh/run.cmd additionally redirect the whole `dotnet
+         build` step's stdout to stderr as belt-and-suspenders, since stdout
+         here is a machine-parsed, newline-delimited JSON channel (plan
+         Section 4a). -->
+    <NoWarn>$(NoWarn);CS8618</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shared helpers, compiled into both Probe.csproj and SdkProbe.csproj:
+         mirrors Java's Shared.java being compiled into both Probe.java and
+         SdkProbe.java independently, so a tier-2 change can never break tier 1. -->
+    <Compile Include="..\Shared\Shared.cs" Link="Shared.cs" />
+  </ItemGroup>
+
+</Project>

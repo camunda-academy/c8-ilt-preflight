@@ -1,0 +1,71 @@
+# Go binaries
+preflight/releases/
+*.exe
+preflight/layer1/c8preflight
+
+# Secrets / credentials
+.env
+*.env
+credentials.json
+client_secret*
+
+# Data exports / archives
+*.zip
+files.zip
+
+# Local-only notes
+*.local.md
+
+# Exported certs (proxy CA chains, etc.) — local test artifacts only
+*.pem
+proxy-chain*
+
+# Tool result output — local run artifacts, may contain the real clusterId.
+# Only the DEFAULT filename is matched here; a custom --out name won't be, so
+# the tool warns at runtime when it writes a result inside a git repo (audit
+# finding #11). Prefer writing results to $TEMP / outside the repo.
+c8-preflight-result-*.json
+*preflight-result*.json
+
+# Python bytecode (Layer 2 python probes)
+__pycache__/
+*.pyc
+
+# Java compiled classes (Layer 2 java probe — compiled to out/ by run.sh/run.cmd)
+preflight/layer2/java/out/
+*.class
+
+# Java SDK-tier scratch: Maven-resolved classpath cache for SdkProbe.java
+# (fetched on demand, opt-in via CAMUNDA_SDK_AUTO_INSTALL — never committed)
+preflight/layer2/java/sdk/
+
+# TypeScript SDK-tier scratch: npm-resolved dependency cache for probe_sdk.js
+# (fetched on demand via `npm ci`, opt-in via CAMUNDA_SDK_AUTO_INSTALL — never
+# committed). package.json + package-lock.json ARE committed (the exact pin +
+# hash-verified lockfile probe_sdk.js installs against).
+preflight/layer2/typescript/node_modules/
+
+# C#/.NET build outputs + NuGet restore artifacts (Layer 2 csharp probes —
+# both Probe/ tier 1 and SdkProbe/ tier 2 are rebuilt by run.sh/run.cmd on
+# every invocation).
+# SdkProbe/packages.lock.json IS committed (the exact pin + hash-verified
+# lockfile SdkProbe.csproj restores against via `dotnet restore --locked-mode`
+# — the NuGet equivalent of TypeScript's package-lock.json + `npm ci`).
+preflight/layer2/csharp/Probe/bin/
+preflight/layer2/csharp/Probe/obj/
+preflight/layer2/csharp/Probe/out/
+preflight/layer2/csharp/SdkProbe/bin/
+preflight/layer2/csharp/SdkProbe/obj/
+preflight/layer2/csharp/SdkProbe/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Claude Code local session/tool config — never committed
+.claude/

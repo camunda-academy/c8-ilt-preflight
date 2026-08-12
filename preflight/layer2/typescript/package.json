@@ -1,0 +1,10 @@
+{
+  "name": "c8-preflight-layer2-typescript",
+  "private": true,
+  "description": "Scratch manifest for the Layer 2 TypeScript/Node.js tier-2 SDK-snippet probe (probe_sdk.js). Not a publishable package -- exists only so `npm ci` can resolve+lock the exact-pinned Camunda SDK version. See probe_sdk.js for why the version is exact-pinned rather than a range.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@camunda8/orchestration-cluster-api": "9.1.2",
+    "undici": "7.28.0"
+  }
+}
