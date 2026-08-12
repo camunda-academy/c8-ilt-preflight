@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Layer 2 SDK-snippet confirmation (C#/.NET), tier 2.
+
+    Package/version verified against the live NuGet registry and the tagged
+    GitHub source during this unit's research, NOT assumed from the plan's
+    original guess ("Camunda.Orchestration.Sdk 9.*, .NET 8+"):
+      - The package name WAS correct: Camunda.Orchestration.Sdk really is the
+        current Camunda 8 C#/.NET SDK
+        (github.com/camunda/orchestration-cluster-api-csharp).
+      - The plan's "9.*" was a RANGE, which this project's exact-pin policy
+        forbids for auto-install (a range lets a future compromised release in
+        silently). The NuGet registry's listed versions top out at 9.1.3
+        (published 2026-06-25). A 10.0.0 stable WAS published on NuGet but is
+        UNLISTED (published date 1900-01-01, listed:false via the registration
+        API) - superseded by the 10.0.0-alpha.x prerelease line, which targets
+        Camunda 8.10. Per the SDK's own README: "SDK version n.y.z -> server
+        version 8.n", so 9.y.z is the correct major for this project's 8.9
+        target, matching the v9.1.3 git tag exactly. Pinned exactly to 9.1.3
+        below (this project's hard security policy: exact-pinned auto-installed
+        dependencies only, never a range).
+      - TargetFramework here is net9.0 for the same reason as Probe.csproj (see
+        its comment) - this dev machine only has the .NET 9 SDK/runtime
+        installed. The package's own NuGet dependency-group metadata targets
+        net8.0; a net8.0 library is forward-compatible with a net9.0 app, so
+        this resolves and runs fine here.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>SdkProbe</AssemblyName>
+    <RootNamespace>CamundaPreflight.SdkProbe</RootNamespace>
+    <NoWarn>$(NoWarn);CS8618</NoWarn>
+
+    <!-- NuGet's hash-verification lockfile mechanism - the same supply-chain
+         guarantee TypeScript gets from package-lock.json plus "npm ci".
+         Generated once via a "dotnet restore" with lock-file generation
+         enabled, and committed (packages.lock.json next to this file).
+         run.sh/run.cmd's auto-install path restores in locked mode, which
+         REFUSES to proceed if the resolved graph doesn't match the committed
+         lock file - the same guarantee "npm ci" gives, npm's
+         lockfile-and-integrity mechanism translated to the NuGet idiom. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Camunda.Orchestration.Sdk" Version="9.1.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared helpers - see Probe.csproj's identical Compile Include for why
+         this is a linked source file rather than a project reference (mirrors
+         Java's Shared.java being compiled into both Probe.java and
+         SdkProbe.java independently, so a tier-2 dependency issue can never
+         take down the mandatory tier-1 probe). -->
+    <Compile Include="..\Shared\Shared.cs" Link="Shared.cs" />
+  </ItemGroup>
+
+</Project>

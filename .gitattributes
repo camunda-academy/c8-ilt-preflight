@@ -1,0 +1,13 @@
+# Line-ending policy for distributed scripts.
+# PowerShell 5.1 mis-parses LF-only scripts (breaks backtick line-continuations),
+# so .ps1 must be CRLF. Bash breaks on CRLF, so .sh must stay LF.
+#
+# Order matters: git applies the LAST matching line per attribute, and `*`
+# matches everything — so the catch-all must come FIRST, with specific
+# overrides listed AFTER it, or they get silently overridden.
+
+*       text=auto eol=lf
+
+*.ps1   text eol=crlf
+*.sh    text eol=lf
+*.py    text eol=lf
