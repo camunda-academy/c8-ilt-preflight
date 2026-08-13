@@ -29,7 +29,7 @@ import javax.net.ssl.TrustManagerFactory;
  *   CAMUNDA_REST_ADDRESS         full cluster REST URL (wins over CAMUNDA_REGION)
  *   CAMUNDA_REGION               region slug, default bru-2
  *   CAMUNDA_CA_CERTIFICATE_PATH  extra CA PEM -- the REAL env var name the Java
- *       SDK reads (verified against camunda-client-java 8.9.11 source,
+ *       SDK reads (verified against camunda-client-java 8.9.15 source,
  *       CamundaClientEnvironmentVariables.CA_CERTIFICATE_VAR). This is
  *       DELIBERATELY NOT the same name as CAMUNDA_MTLS_CA_PATH used by the
  *       Go/Python/TypeScript probes -- if a customer sets CAMUNDA_MTLS_CA_PATH
@@ -51,7 +51,7 @@ import javax.net.ssl.TrustManagerFactory;
  * project:
  *   {runtime, trustStoreExercised, target, verdict, errorClass, detail}
  *
- * Trust-store behavior, verified against camunda-client-java 8.9.11 source
+ * Trust-store behavior, verified against camunda-client-java 8.9.15 source
  * (io.camunda.client.impl.http.HttpClientFactory.createSslContext /
  * createKeyStore), NOT assumed:
  *

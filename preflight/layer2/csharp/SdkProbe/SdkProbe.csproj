@@ -7,15 +7,15 @@
     source:
       - Camunda.Orchestration.Sdk is the current Camunda 8 C#/.NET SDK
         (github.com/camunda/orchestration-cluster-api-csharp).
-      - Pinned exactly to 9.1.3 below. This project's hard security policy is
+      - Pinned exactly to 9.2.0 below. This project's hard security policy is
         exact-pinned auto-installed dependencies only, never a range: a range
         lets a future compromised release in silently. The NuGet registry's
-        listed versions top out at 9.1.3 (published 2026-06-25). A 10.0.0
+        listed versions top out at 9.2.0 (published 2026-08-05). A 10.0.0
         stable WAS published on NuGet but is UNLISTED (published date
         1900-01-01, listed:false via the registration API) - superseded by the
         10.0.0-alpha.x prerelease line, which targets Camunda 8.10. Per the
         SDK's own README: "SDK version n.y.z -> server version 8.n", so 9.y.z
-        is the correct major for this project's 8.9 target, matching the v9.1.3
+        is the correct major for this project's 8.9 target, matching the v9.2.0
         git tag exactly.
       - TargetFramework is deliberately FIXED here, unlike Probe.csproj which
         derives it from the installed SDK. Two reasons pull this way:
@@ -55,7 +55,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Camunda.Orchestration.Sdk" Version="9.1.3" />
+    <PackageReference Include="Camunda.Orchestration.Sdk" Version="9.2.0" />
   </ItemGroup>
 
   <ItemGroup>

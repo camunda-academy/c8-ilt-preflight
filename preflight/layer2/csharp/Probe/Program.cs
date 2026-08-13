@@ -23,7 +23,7 @@
 //
 // ---------------------------------------------------------------------------
 // CRITICAL, verified against the real SDK's own source (Camunda.Orchestration.
-// Sdk 9.1.3, src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs) - what
+// Sdk 9.2.0, src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs) - what
 // happens once a custom CA is ALSO configured, which ".NET trusts the OS
 // store" by itself does not answer:
 //

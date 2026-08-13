@@ -109,7 +109,7 @@ fi
 # no separator/mixed-path handling -- one clean directory path. ---
 SDK_DIR="$DIR/sdk"
 SDK_LIB="$SDK_DIR/lib"
-SDK_SPEC="io.camunda:camunda-client-java:8.9.11"
+SDK_SPEC="io.camunda:camunda-client-java:8.9.15"
 
 auto_install=0
 if [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "1" ] || [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "true" ]; then
@@ -137,7 +137,7 @@ if ! libHasJars && [ "$auto_install" = "1" ] && command -v mvn >/dev/null 2>&1; 
   <groupId>local</groupId><artifactId>probe</artifactId><version>1.0</version>
   <dependencies>
     <dependency>
-      <groupId>io.camunda</groupId><artifactId>camunda-client-java</artifactId><version>8.9.11</version>
+      <groupId>io.camunda</groupId><artifactId>camunda-client-java</artifactId><version>8.9.15</version>
     </dependency>
   </dependencies>
 </project>
@@ -175,7 +175,7 @@ elif [ "$mvn_failed" = "1" ]; then
   # (the dedicated Maven dependency-resolution check does, via Central-vs-mirror
   # isolation) -- so it flags the finding and defers the authoritative
   # verdict, rather than asserting a cause it didn't isolate.
-  echo '{"runtime":"java","trustStoreExercised":"","target":"maven-dependency-resolution","verdict":"WARN","errorClass":"MAVEN_RESOLVE_FAIL","detail":"Maven is installed and ran but could NOT resolve io.camunda:camunda-client-java:8.9.11 -- this is NOT a missing-Maven problem. Likely a corporate Maven mirror such as Nexus or Artifactory that cannot serve the Camunda artifacts -- missing, stale, or 401 -- or a proxy blocking Maven Central. This blocks building the training exercises regardless of cluster connectivity. See the mvn output on stderr above; run the dedicated Maven dependency-resolution check to isolate Central vs mirror."}'
+  echo '{"runtime":"java","trustStoreExercised":"","target":"maven-dependency-resolution","verdict":"WARN","errorClass":"MAVEN_RESOLVE_FAIL","detail":"Maven is installed and ran but could NOT resolve io.camunda:camunda-client-java:8.9.15 -- this is NOT a missing-Maven problem. Likely a corporate Maven mirror such as Nexus or Artifactory that cannot serve the Camunda artifacts -- missing, stale, or 401 -- or a proxy blocking Maven Central. This blocks building the training exercises regardless of cluster connectivity. See the mvn output on stderr above; run the dedicated Maven dependency-resolution check to isolate Central vs mirror."}'
 else
   # Static, safe JSON (no untrusted content) -- SKIP, not FAIL: Maven was not
   # run (absent, or auto-install not opted in), so there is nothing to report

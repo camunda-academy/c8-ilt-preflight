@@ -69,7 +69,7 @@ import java.util.concurrent.TimeUnit;
 public final class DepCheck {
 
   // Training coordinates -- ONE place, bump per Camunda release.
-  private static final String CAMUNDA_VERSION = "8.9.11";
+  private static final String CAMUNDA_VERSION = "8.9.15";
   private static final String[] ARTIFACTS = {
     "io.camunda:camunda-spring-boot-starter:" + CAMUNDA_VERSION, // SB4
     "io.camunda:camunda-spring-boot-3-starter:" + CAMUNDA_VERSION, // SB3.5

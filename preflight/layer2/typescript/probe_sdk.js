@@ -22,11 +22,11 @@
  *    project's security policy forbids ranges for auto-install (a range lets
  *    a future compromised release in silently -- same reasoning as Python's
  *    exact SDK_VERSION pin). The registry exposes three dist-tags:
- *    "8-stable" (8.8.4), "latest" (9.1.2, the current stable release), and
- *    "alpha" (10.0.0-alpha.15, prerelease, not used). Pinned exactly to
- *    9.1.2 below.
+ *    "8-stable" (8.8.5), "latest" (9.1.4, the current stable release), and
+ *    "alpha" (10.0.0-alpha.27, prerelease, not used). Pinned exactly to
+ *    9.1.4 below.
  *  - The SDK's major version tracks the Camunda SERVER's minor version
- *    (SDK 9.y.z <-> Camunda 8.9 -- see the package's own README), so 9.1.2 is
+ *    (SDK 9.y.z <-> Camunda 8.9 -- see the package's own README), so 9.1.4 is
  *    the right major for this project's target server line.
  *  - package.json declares "engines": {"node": ">=22"}, but the README says
  *    "Node 20+ (native fetch & File)" -- the two disagree. engines.node is
@@ -57,7 +57,7 @@
  *
  * ---------------------------------------------------------------------------
  * Trust-store nuance, verified against the SDK's own published source
- * (dist/chunk-WSCXETVI.js in the 9.1.2 tarball), NOT assumed: with no custom
+ * (dist/chunk-4NRTES5E.js in the 9.1.4 tarball), NOT assumed: with no custom
  * CA/mTLS material configured, the SDK calls Node's global `fetch` (undici)
  * with no custom Agent at all -- i.e. Node's own built-in root certificates,
  * the SAME default probe.js's tier-1 check uses. Once CAMUNDA_MTLS_CA_PATH
@@ -91,7 +91,7 @@
  * SDK's config hydration auto-upgrades CAMUNDA_AUTH_STRATEGY from its NONE
  * default to OAUTH the moment CAMUNDA_CLIENT_ID/CAMUNDA_CLIENT_SECRET are
  * present in the environment -- even if CAMUNDA_AUTH_STRATEGY was never set
- * at all (source: chunk-WSCXETVI.js's config-hydration step). A network-mode
+ * at all (source: chunk-4NRTES5E.js's config-hydration step). A network-mode
  * run that merely leaves auth unconfigured would silently authenticate if
  * credentials happen to be in the shell (e.g. left over from an earlier
  * full-mode run). This probe defeats that by explicitly passing
@@ -118,7 +118,7 @@ const {
 } = require('./_shared');
 
 const SDK_NAME = '@camunda8/orchestration-cluster-api';
-const SDK_VERSION = '9.1.2';
+const SDK_VERSION = '9.1.4';
 const SDK_SPEC = SDK_NAME + '@' + SDK_VERSION;
 const INSTALL_TIMEOUT_MS = 90000;
 const REQUEST_TIMEOUT_MS = 15000;
