@@ -172,12 +172,12 @@ if not exist "%SDK_LIB%\*.jar" if "%AUTO_INSTALL%"=="1" (
       echo   ^<groupId^>local^</groupId^>^<artifactId^>probe^</artifactId^>^<version^>1.0^</version^>
       echo   ^<dependencies^>
       echo     ^<dependency^>
-      echo       ^<groupId^>io.camunda^</groupId^>^<artifactId^>camunda-client-java^</artifactId^>^<version^>8.9.11^</version^>
+      echo       ^<groupId^>io.camunda^</groupId^>^<artifactId^>camunda-client-java^</artifactId^>^<version^>8.9.15^</version^>
       echo     ^</dependency^>
       echo   ^</dependencies^>
       echo ^</project^>
     ) > "%SDK_DIR%\pom.xml"
-    echo [java sdk-probe] resolving io.camunda:camunda-client-java:8.9.11 via Maven ^(first run only, cached after^)... 1>&2
+    echo [java sdk-probe] resolving io.camunda:camunda-client-java:8.9.15 via Maven ^(first run only, cached after^)... 1>&2
     pushd "%SDK_DIR%"
     call mvn -q -B dependency:copy-dependencies -DoutputDirectory=lib 1>&2
     if not !ERRORLEVEL!==0 set MVN_FAILED=1
@@ -201,7 +201,7 @@ if exist "%SDK_LIB%\*.jar" (
   rem the dedicated Maven dependency-resolution check does that, so defer to it.
   rem No parentheses in the detail string: unescaped '(' / ')' break echo inside
   rem a batch parenthesized block.
-  echo {"runtime":"java","trustStoreExercised":"","target":"maven-dependency-resolution","verdict":"WARN","errorClass":"MAVEN_RESOLVE_FAIL","detail":"Maven is installed and ran but could NOT resolve io.camunda:camunda-client-java:8.9.11 -- this is NOT a missing-Maven problem. Likely a corporate Maven mirror such as Nexus or Artifactory that cannot serve the Camunda artifacts -- missing, stale, or 401 -- or a proxy blocking Maven Central. This blocks building the training exercises regardless of cluster connectivity. See the mvn output on stderr above; run the dedicated Maven dependency-resolution check to isolate Central vs mirror."}
+  echo {"runtime":"java","trustStoreExercised":"","target":"maven-dependency-resolution","verdict":"WARN","errorClass":"MAVEN_RESOLVE_FAIL","detail":"Maven is installed and ran but could NOT resolve io.camunda:camunda-client-java:8.9.15 -- this is NOT a missing-Maven problem. Likely a corporate Maven mirror such as Nexus or Artifactory that cannot serve the Camunda artifacts -- missing, stale, or 401 -- or a proxy blocking Maven Central. This blocks building the training exercises regardless of cluster connectivity. See the mvn output on stderr above; run the dedicated Maven dependency-resolution check to isolate Central vs mirror."}
 ) else (
   rem Static, safe JSON -- SKIP, not FAIL: Maven was not run (absent, or
   rem auto-install not opted in), nothing to report yet. The mandatory native

@@ -23,13 +23,13 @@ import java.net.URI;
  *   javac -encoding UTF-8 -cp &lt;resolved classpath&gt; SdkProbe.java Shared.java
  *   java -Dstdout.encoding=UTF-8 -cp out:&lt;resolved classpath&gt; SdkProbe
  *
- * The vanilla client (io.camunda:camunda-client-java:8.9.11) is used directly
+ * The vanilla client (io.camunda:camunda-client-java:8.9.15) is used directly
  * -- no Spring Boot Starter, no Spring context. This is the "literal SDK
  * connects + gets topology" real confirmation that complements the SDK-free
  * native probe (Probe.java) -- catching proxy-handling/config issues the raw
  * probe can't.
  *
- * Real facts below verified against camunda-client-java 8.9.11 source (jar +
+ * Real facts below verified against camunda-client-java 8.9.15 source (jar +
  * sources jar from Maven Central), not assumed:
  *
  *  - CamundaClientBuilder auto-wires an OAuth CredentialsProvider whenever
@@ -197,7 +197,7 @@ public final class SdkProbe {
           .audience(Shared.envOrDefault("CAMUNDA_TOKEN_AUDIENCE", "zeebe.camunda.io"))
           .authorizationServerUrl(
               Shared.envOrDefault("CAMUNDA_OAUTH_URL", "https://login.cloud.camunda.io/oauth/token"));
-      // Verified in camunda-client-java 8.9.11 source (OAuthCredentialsProvider
+      // Verified in camunda-client-java 8.9.15 source (OAuthCredentialsProvider
       // uses its own HttpsURLConnection for the token fetch, and only trusts a
       // custom CA if truststorePath()/keystorePath() are set on THIS builder --
       // a completely separate config surface from CamundaClientBuilder's

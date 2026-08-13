@@ -290,14 +290,14 @@ public static class Shared
     // ---- trust context (tier-1 native probe) ----
     //
     // Deliberately mirrors the REAL SDK's own TlsHelper.BuildHandler logic
-    // (verified against Camunda.Orchestration.Sdk 9.1.3 source,
+    // (verified against Camunda.Orchestration.Sdk 9.2.0 source,
     // src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs), not just its
     // *semantics* -- see ValidateWithCustomCa below. This is the "false-green
     // principle": tier 1 must exercise the SAME trust decision the SDK
     // exercises for the SAME env var, or it's worthless as a proxy for "does
     // the SDK trust this."
     //
-    // Verified against Camunda.Orchestration.Sdk 9.1.3 source
+    // Verified against Camunda.Orchestration.Sdk 9.2.0 source
     // (src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs) - what happens once
     // a custom CA is ALSO configured, which ".NET trusts the OS store" by
     // itself does not answer:

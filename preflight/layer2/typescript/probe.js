@@ -25,8 +25,8 @@
  * when CAMUNDA_MTLS_CA_PATH is set, this probe's custom-CA trust context REPLACES
  * Node's default root store; it does NOT append to it.
  *
- * Why: @camunda8/orchestration-cluster-api 9.1.2's own mTLS handling (its
- * published dist/chunk-WSCXETVI.js) builds `new https.Agent({ca: <PEM>})`
+ * Why: @camunda8/orchestration-cluster-api 9.1.4's own mTLS handling (its
+ * published dist/chunk-4NRTES5E.js) builds `new https.Agent({ca: <PEM>})`
  * whenever CAMUNDA_MTLS_CA_PATH/_CA/_CERT_PATH/_KEY_PATH are set -- it does
  * NOT spread Node's own `tls.rootCertificates` into that `ca` value first.
  * Per Node's documented tls.createSecureContext() behavior, supplying `ca`

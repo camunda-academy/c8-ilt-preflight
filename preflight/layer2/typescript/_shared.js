@@ -154,7 +154,7 @@ function resolveApiHost() {
  *
  * This exists because the real Camunda TypeScript SDK does NOT tolerate the
  * exact string Camunda Console tells users to copy either -- verified
- * against the SDK's own config-hydration source (dist/chunk-WSCXETVI.js): it
+ * against the SDK's own config-hydration source (dist/chunk-4NRTES5E.js): it
  * only appends '/v2' when the path doesn't already end in it, with no UUID
  * extraction or stray-segment stripping.
  * Console's copy-paste form embeds a stray ':443' path segment

@@ -22,7 +22,7 @@ set "NODEVER="
 set "NODEMAJOR="
 
 rem Minimum Node this check needs -- read off the sources, not guessed: the
-rem exact-pinned tier-2 SDK (@camunda8/orchestration-cluster-api 9.1.2 in
+rem exact-pinned tier-2 SDK (@camunda8/orchestration-cluster-api 9.1.4 in
 rem package.json/package-lock.json) declares engines.node ">=22", npm's own
 rem install-time-enforced contract and the same 22+ the PATH-lookup message
 rem below already cites. Its lower sub-floors are Node 18 (the global `fetch`

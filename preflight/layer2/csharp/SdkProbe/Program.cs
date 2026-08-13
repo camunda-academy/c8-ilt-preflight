@@ -12,11 +12,11 @@
 //
 // ---------------------------------------------------------------------------
 // Package/version - see SdkProbe.csproj's own comment for the details
-// (Camunda.Orchestration.Sdk, exact-pinned 9.1.3; a 10.0.0 stable exists on
+// (Camunda.Orchestration.Sdk, exact-pinned 9.2.0; a 10.0.0 stable exists on
 // NuGet but is unlisted).
 //
 // Client construction / methods, verified against the real SDK's source at
-// git tag v9.1.3 (CamundaClient.cs, Generated/CamundaClient.Generated.cs):
+// git tag v9.2.0 (CamundaClient.cs, Generated/CamundaClient.Generated.cs):
 //   - CamundaClient.Create(CamundaOptions?) constructs the client.
 //   - GetTopologyAsync() returns TopologyResponse with a Brokers list,
 //     matching this tool's convention.
@@ -107,7 +107,7 @@ using CamundaPreflight;
 using Microsoft.Extensions.Logging.Abstractions;
 
 const string Usage = "Layer 2 SDK-snippet confirmation -- C#/.NET.\n" +
-    "Requires Camunda.Orchestration.Sdk 9.1.3 - see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.\n" +
+    "Requires Camunda.Orchestration.Sdk 9.2.0 - see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.\n" +
     "Supported env vars are listed in this probe's source header.";
 
 if (Array.IndexOf(args, "-h") >= 0 || Array.IndexOf(args, "--help") >= 0)

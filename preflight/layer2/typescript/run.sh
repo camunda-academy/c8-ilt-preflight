@@ -22,7 +22,7 @@ set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Minimum Node for TIER 2 ONLY -- read off the sources, not guessed: the
-# exact-pinned tier-2 SDK (@camunda8/orchestration-cluster-api 9.1.2 in
+# exact-pinned tier-2 SDK (@camunda8/orchestration-cluster-api 9.1.4 in
 # package.json/package-lock.json) declares engines.node ">=22", npm's own
 # install-time-enforced contract. Its lower sub-floors are Node 18 (the global
 # `fetch` the SDK's HTTP client calls -- below it, tier 2 dies with a bare
