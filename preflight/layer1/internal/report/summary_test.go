@@ -610,3 +610,24 @@ func TestNotes_MergesSameCauseAcrossStageHosts(t *testing.T) {
 		t.Fatalf("expected both hosts to be listed in the merged bullet, got %q", got)
 	}
 }
+
+// shortVersion parses banner text the runtime chooses, not a fixed format, so
+// each runtime's real shape is pinned here — including the JDK's, where the
+// version is buried mid-line between quotes and followed by a release date that
+// must not be swallowed.
+func TestShortVersion(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{`openjdk version "21.0.8" 2025-07-15 LTS`, "21.0.8"},
+		{`java version "1.8.0_401"`, "1.8.0"}, // JDK 8's legacy 1.x form
+		{"Python 3.13.1", "3.13.1"},
+		{"v22.14.0", "22.14.0"},
+		{"9.0.316", "9.0.316"},
+		{"", ""},
+		{"no digits here", ""},
+	}
+	for _, c := range cases {
+		if got := shortVersion(c.raw); got != c.want {
+			t.Errorf("shortVersion(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+}

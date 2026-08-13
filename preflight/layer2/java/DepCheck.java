@@ -89,7 +89,7 @@ public final class DepCheck {
     try {
       System.exit(run(args));
     } catch (Throwable t) {
-      System.out.println(Shared.crashFragment(String.valueOf(t)));
+      System.out.println(Shared.crashFragment(Shared.describeThrowable(t)));
       System.exit(1);
     }
   }
@@ -113,8 +113,8 @@ public final class DepCheck {
     }
     if (!optedIn) {
       // Kept short deliberately -- this ends up in the customer-facing
-      // result, not just an engineering log. Why it's opt-in (real network
-      // fetches) is documented in RUNBOOK.md, not repeated here every run.
+      // result, not just an engineering log. It's opt-in because it does real
+      // network fetches, which shouldn't happen on every routine run.
       System.out.println(Shared.fragment(
           "maven-dependency-resolution", "SKIP", "OK",
           "check not run -- opt in with --maven-depcheck (or CAMUNDA_MAVEN_DEPCHECK=1)"));
@@ -177,8 +177,9 @@ public final class DepCheck {
 
       if (customer.resolved) {
         // Kept short deliberately -- this ends up in the customer-facing
-        // result, not just an engineering log. The "fresh fetch, not a
-        // cached false-green" guarantee is documented in RUNBOOK.md.
+        // result, not just an engineering log. This check always does a
+        // fresh fetch rather than trusting a local cache, so a PASS here
+        // can't be a stale, cached false-green.
         System.out.println(Shared.fragment(
             "training-deps (customer)", "PASS", "OK",
             "all Camunda " + CAMUNDA_VERSION + " training artifacts resolve through " + customerLabel + "."));

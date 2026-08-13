@@ -60,8 +60,7 @@ def resolve_targets():
 def build_ssl_context():
     # store_label is kept short and plain-language deliberately -- it ends up
     # in the customer-facing result (Notes/FAIL details), not just an
-    # engineering log. The certifi-vs-SDK nuance is documented in RUNBOOK.md
-    # for trainers, not repeated here every time a participant runs the tool.
+    # engineering log.
     import os
 
     custom_ca = os.environ.get("CAMUNDA_MTLS_CA_PATH", "").strip()
@@ -146,7 +145,7 @@ def probe_target(host, port, ctx, store_label, proxy_url):
     except ssl.SSLCertVerificationError as e:
         return fragment(target, "FAIL", "TLS_HANDSHAKE_FAIL",
                          "certificate not trusted by %s: %s — likely a TLS-intercepting proxy; "
-                         "import its root CA via CAMUNDA_MTLS_CA_PATH (see RUNBOOK)" % (store_label, e),
+                         "import its root CA via CAMUNDA_MTLS_CA_PATH" % (store_label, e),
                          store_label)
     except Exception as e:
         error_class, detail = classify_transport_error(e)

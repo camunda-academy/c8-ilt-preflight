@@ -35,8 +35,9 @@ func TestWriteResultJSON_Perms(t *testing.T) {
 }
 
 // TestWriteExclusive_RefusesExisting confirms the temp-fallback writer won't
-// follow/clobber a pre-planted file (the symlink/pre-creation race in finding
-// #10). Cross-platform (O_EXCL works on Windows too).
+// follow/clobber a pre-planted file -- a symlink or pre-created file at the
+// target path must not be silently followed or overwritten. Cross-platform
+// (O_EXCL works on Windows too).
 func TestWriteExclusive_RefusesExisting(t *testing.T) {
 	dir := t.TempDir()
 	planted := filepath.Join(dir, "planted.json")

@@ -81,8 +81,7 @@
 // HttpEnvironmentProxy), which DOES check HTTP_PROXY/HTTPS_PROXY environment
 // variables cross-platform since .NET Core - a genuine, positive difference
 // from Node (whose fetch ignores these vars entirely) and Java (which needs
-// JVM system properties, not env vars). Verified live via mitmproxy - see
-// RUNBOOK's C# section.
+// JVM system properties, not env vars). Verified live via mitmproxy.
 //
 // Logging / stdout-contamination finding, verified against
 // SdkConsoleLoggerFactory.cs + CamundaConfig.cs source, NOT a credential leak
@@ -112,7 +111,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 const string Usage = "Layer 2 SDK-snippet confirmation -- C#/.NET.\n" +
     "Requires Camunda.Orchestration.Sdk 9.1.3 - see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.\n" +
-    "See the RUNBOOK's C# / .NET section for env vars.";
+    "Supported env vars are listed in this probe's source header.";
 
 if (Array.IndexOf(args, "-h") >= 0 || Array.IndexOf(args, "--help") >= 0)
 {

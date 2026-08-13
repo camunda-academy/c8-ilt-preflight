@@ -47,6 +47,29 @@ func TestExitCodeFor_ClusterProblemFromProbeAlone(t *testing.T) {
 	}
 }
 
+// A probe-error is the launcher's way of saying "this stack was only partially
+// verified" — e.g. a tier that died before emitting a result, so its mandatory
+// trust check never actually ran. That must escalate to an overall FAIL and a
+// non-zero exit, never be reported alongside "All checks passed": a
+// half-checked stack silently reading as green is the worst outcome this tool
+// can produce.
+func TestBuildOverall_ProbeErrorEscalatesToFail(t *testing.T) {
+	probes := []model.ProbeFragment{
+		{Runtime: "csharp", Target: "sdk", Verdict: model.VerdictSkip, ErrorClass: model.ErrOK},
+		{Runtime: "csharp", Verdict: model.VerdictProbeError, ErrorClass: model.ErrProbeCrashed},
+	}
+	overall := BuildOverall([]model.Stage{stage(model.VerdictPass, model.ErrOK)}, probes)
+	if overall.Verdict != model.VerdictFail {
+		t.Errorf("overall verdict = %q, want FAIL — a partially-verified stack must not read as passing", overall.Verdict)
+	}
+	if overall.FailingStage != "layer2:csharp" {
+		t.Errorf("failing stage = %q, want %q", overall.FailingStage, "layer2:csharp")
+	}
+	if got := ExitCodeFor(model.Result{Probes: probes, Overall: overall}); got == model.ExitOK {
+		t.Error("exit code = ExitOK, want non-zero for a probe-error")
+	}
+}
+
 func TestExitCodeFor_NetworkFailAlone(t *testing.T) {
 	stages := []model.Stage{stage(model.VerdictFail, model.ErrConnectRefused)}
 	overall := BuildOverall(stages, nil)

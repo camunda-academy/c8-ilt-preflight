@@ -165,7 +165,7 @@ func TLSInspect(ctx context.Context, conn net.Conn, host string, port int, custo
 		alpnVerdict = model.VerdictWarn
 		alpnCode = model.ErrALPNDowngradeWarn
 		alpnDetail = fmt.Sprintf(
-			"negotiated %s instead of h2 — only matters if your cohort uses the legacy gRPC Zeebe client; "+
+			"negotiated %s instead of h2 — only matters if your training group uses the legacy gRPC Zeebe client; "+
 				"the v2 REST API works fine over HTTP/1.1", nonEmpty(state.NegotiatedProtocol, "(none)"))
 	}
 	alpnStage := model.Stage{

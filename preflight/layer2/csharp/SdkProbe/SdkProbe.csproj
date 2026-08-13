@@ -1,15 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Layer 2 SDK-snippet confirmation (C#/.NET). Plan Phase 3, unit 3.3, tier 2.
+    Layer 2 SDK-snippet confirmation (C#/.NET), tier 2.
 
     Package/version verified against the live NuGet registry and the tagged
-    GitHub source during this unit's research, NOT assumed from the plan's
-    original guess ("Camunda.Orchestration.Sdk 9.*, .NET 8+"):
+    GitHub source, not assumed from an initial guess ("Camunda.Orchestration.Sdk 9.*, .NET 8+"):
       - The package name WAS correct: Camunda.Orchestration.Sdk really is the
         current Camunda 8 C#/.NET SDK
         (github.com/camunda/orchestration-cluster-api-csharp).
-      - The plan's "9.*" was a RANGE, which this project's exact-pin policy
+      - The initial "9.*" guess was a RANGE, which this project's exact-pin policy
         forbids for auto-install (a range lets a future compromised release in
         silently). The NuGet registry's listed versions top out at 9.1.3
         (published 2026-06-25). A 10.0.0 stable WAS published on NuGet but is
@@ -20,15 +19,25 @@
         target, matching the v9.1.3 git tag exactly. Pinned exactly to 9.1.3
         below (this project's hard security policy: exact-pinned auto-installed
         dependencies only, never a range).
-      - TargetFramework here is net9.0 for the same reason as Probe.csproj (see
-        its comment) - this dev machine only has the .NET 9 SDK/runtime
-        installed. The package's own NuGet dependency-group metadata targets
-        net8.0; a net8.0 library is forward-compatible with a net9.0 app, so
-        this resolves and runs fine here.
+      - TargetFramework is deliberately FIXED here, unlike Probe.csproj which
+        derives it from the installed SDK. Two reasons pull this way:
+        packages.lock.json records its resolved graph per target framework, and
+        a restore in locked mode fails outright if the TFM being built has no
+        matching entry - so a TFM that shifts with the machine's SDK would
+        break the lockfile guarantee on any machine whose SDK major differs from
+        whoever regenerated it. And unlike tier 1, this tier cannot be
+        offline-only anyway: it exists to fetch and exercise the real SDK
+        package, so the targeting-pack download that a fixed TFM may imply costs
+        nothing it wasn't already paying.
+        net8.0 is the value because it's the SDK's own declared minimum and the
+        lowest major still buildable by every supported SDK (8, 9, 10) - a
+        newer TFM could not be built at all by an older SDK, whereas this one
+        builds everywhere and, being forward-compatible, runs everywhere.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>LatestMajor</RollForward>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>

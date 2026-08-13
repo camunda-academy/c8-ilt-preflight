@@ -120,13 +120,25 @@ type ProbeFragment struct {
 
 // Target describes the resolved connection target for this run.
 type Target struct {
-	Region        string              `json:"region"`
-	ClusterID     string              `json:"clusterId,omitempty"`
-	APIHost       string              `json:"apiHost"`
-	ZeebeHost     string              `json:"zeebeHost"`
-	ResolvedIPs   map[string][]string `json:"resolvedIPs,omitempty"`
-	OAuthHost     string              `json:"oauthHost"`
-	DetectedProxy string              `json:"detectedProxy,omitempty"` // masked; empty = no proxy in effect
+	Region      string              `json:"region"`
+	ClusterID   string              `json:"clusterId,omitempty"`
+	APIHost     string              `json:"apiHost"`
+	ZeebeHost   string              `json:"zeebeHost"`
+	ResolvedIPs map[string][]string `json:"resolvedIPs,omitempty"`
+	OAuthHost   string              `json:"oauthHost"`
+	// DetectedProxy: credentials are always masked; the hostname/IP itself is
+	// ALSO masked by default (--unmasked-hostnames opts out) since this file is
+	// routinely shared with a third party (the training team) and the proxy
+	// address reveals internal network naming. Empty = no proxy in effect.
+	DetectedProxy string `json:"detectedProxy,omitempty"`
+
+	// SystemProxy is what the OS itself has configured, which is a different
+	// source from the environment variables DetectedProxy reflects. Recorded
+	// separately, and never merged into DetectedProxy, because the tool did NOT
+	// route through it: conflating them would claim a path that was never taken.
+	// Subject to the same --unmasked-hostnames masking as DetectedProxy. Empty
+	// means either nothing configured or a platform where this isn't read.
+	SystemProxy string `json:"systemProxy,omitempty"`
 }
 
 // Overall is the top-line verdict summary.
@@ -136,15 +148,36 @@ type Overall struct {
 	IsOurClusterProblem bool    `json:"isOurClusterProblem"`
 }
 
+// RuntimeDetail identifies the exact runtime installation a Layer 2 stack was
+// actually checked with — not just which language, but which binary and which
+// version of it.
+//
+// A trust store belongs to a runtime *installation*, not to a language: Java
+// reads the cacerts of whichever JDK ran, Python the certifi of whichever
+// interpreter ran, Node a CA set that varies by major version. A machine with
+// several JDKs (or a system Python next to a project venv) will hand the probe
+// whichever one happens to come first on PATH, which may not be the one the
+// training exercises use. When that happens the probe validates a different
+// trust store than training day will, so recording the identity of what ran is
+// what makes a green result meaningful and a red one diagnosable.
+type RuntimeDetail struct {
+	Stack   string `json:"stack"`
+	Binary  string `json:"binary,omitempty"`  // resolved absolute path
+	Version string `json:"version,omitempty"` // as self-reported, first line
+	// Pinned records that an operator selected this installation explicitly
+	// (--java-home and friends) rather than it being whatever PATH offered.
+	Pinned bool `json:"pinned,omitempty"`
+}
+
 // Result is the unified, versioned document written by every run.
 type Result struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	ToolVersion   string `json:"toolVersion"`
-	Mode          Mode   `json:"mode"`
-	Timestamp     string `json:"timestamp"`
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	CohortID      string `json:"cohortId,omitempty"`
+	SchemaVersion   int    `json:"schemaVersion"`
+	ToolVersion     string `json:"toolVersion"`
+	Mode            Mode   `json:"mode"`
+	Timestamp       string `json:"timestamp"`
+	OS              string `json:"os"`
+	Arch            string `json:"arch"`
+	TrainingGroupID string `json:"trainingGroupId,omitempty"`
 
 	// StacksRequested is the human-readable --stacks/--auto selection (e.g.
 	// "java, python" or "(auto-detect)"), shown in the terminal Header before
@@ -178,6 +211,7 @@ type Result struct {
 
 	RuntimesDetected []string        `json:"runtimesDetected,omitempty"`
 	RuntimesSkipped  []string        `json:"runtimesSkipped,omitempty"`
+	Runtimes         []RuntimeDetail `json:"runtimes,omitempty"`
 	Probes           []ProbeFragment `json:"probes,omitempty"`
 
 	Overall Overall `json:"overall"`

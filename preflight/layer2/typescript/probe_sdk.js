@@ -125,8 +125,7 @@ const INSTALL_TIMEOUT_MS = 90000;
 const REQUEST_TIMEOUT_MS = 15000;
 
 const USAGE = `Layer 2 SDK-snippet confirmation -- TypeScript/Node.js.
-Requires ${SDK_NAME}==${SDK_VERSION} -- see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.
-See the RUNBOOK's TypeScript section for env vars.`;
+Requires ${SDK_NAME}==${SDK_VERSION} -- see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.`;
 
 function autoInstallEnabled() {
   if (process.argv.slice(2).includes('--install')) return true;
@@ -265,12 +264,11 @@ async function runChecks(sdkModule) {
   // ignores HTTP_PROXY/HTTPS_PROXY entirely, so without it a configured
   // --proxy is silently bypassed here while tier 1 correctly tunnels through
   // it -- not a bug, the DEFAULT here deliberately mirrors the real,
-  // unmodified SDK exactly (a cohort's own job-worker code gets the same
+  // unmodified SDK exactly (a training group's own job-worker code gets the same
   // proxy-blind behavior out of the box, unless THEY also apply this same
   // fix). --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT opts into the tunneled
   // check instead, at the cost of no longer testing the real SDK's own
-  // (nonexistent) proxy handling -- see RUNBOOK's TypeScript section for the
-  // full tradeoff.
+  // (nonexistent) proxy handling.
   const proxyUrl = getProxyUrl();
   const proxySupportEnabled = tsProxySupportEnabled();
   let restoreDispatcher = null;
@@ -287,8 +285,7 @@ async function runChecks(sdkModule) {
         'A proxy is configured (--proxy/HTTPS_PROXY) but --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT is not set. The ' +
           "real TypeScript SDK's own fetch has no proxy support at all (confirmed from source) and connects direct -- " +
           'this check mirrors that default exactly, so a PASS below did NOT go through your proxy. Pass ' +
-          '--ts-proxy-support to route this check through the proxy instead (see RUNBOOK for what that does and does ' +
-          "not prove)."
+          '--ts-proxy-support to route this check through the proxy instead.'
       )
     );
   }

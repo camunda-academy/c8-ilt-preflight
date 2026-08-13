@@ -13,7 +13,7 @@ import (
 )
 
 // DefaultRegion is the training default. Always overridable — never
-// hardcode a customer/cohort's actual region.
+// hardcode a customer's or training group's actual region.
 const DefaultRegion = "bru-2"
 
 const OAuthHost = "login.cloud.camunda.io"
