@@ -46,7 +46,7 @@ import java.net.URI;
  *    equivalent to Python's CAMUNDA_AUTH_STRATEGY=NONE; the only way to
  *    guarantee credential-free behavior is to explicitly set
  *    .credentialsProvider(new NoopCredentialsProvider()) on the builder in
- *    network mode. This probe does that -- verified: no token acquired
+ *    network mode. This probe does that -- no token is acquired
  *    in network mode even with credentials present in the environment.
  *
  *  - CRITICAL: relying on the SDK's own env-based auto-wiring for
@@ -127,7 +127,7 @@ public final class SdkProbe {
               "WARN",
               "CONFIG_ERROR",
               "your CAMUNDA_REST_ADDRESS is Camunda Console's copy-paste form (stray ':443' path "
-                  + "segment). The real Java SDK does NOT tolerate it (confirmed: it yields a "
+                  + "segment). The real Java SDK does NOT tolerate it (it yields a "
                   + "'default backend - 404'); this probe normalized it to "
                   + restBase.restBase
                   + " to run the check. Use the canonical form (no ':443', no '/v2') in real application config."));
@@ -204,7 +204,7 @@ public final class SdkProbe {
       // uses its own HttpsURLConnection for the token fetch, and only trusts a
       // custom CA if truststorePath()/keystorePath() are set on THIS builder --
       // a completely separate config surface from CamundaClientBuilder's
-      // caCertificatePath(), which we don't wire here). Confirmed: with
+      // caCertificatePath(), which we don't wire here). With
       // only CAMUNDA_CA_CERTIFICATE_PATH set, the token-fetch connection stays
       // on cacerts, so it rejects an intercepting proxy's cert while the main
       // REST client (which DOES get caCertificatePath) accepts the same proxy

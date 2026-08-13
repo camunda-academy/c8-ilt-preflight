@@ -188,8 +188,8 @@ def run_checks(sdk_mod, sdk_errors):
     # Build the client config. In network mode force CAMUNDA_AUTH_STRATEGY=NONE
     # so the SDK acquires NO token and sends NO Authorization header even when
     # credentials happen to be in the environment — otherwise the SDK would
-    # auto-infer OAUTH and authenticate a "credential-free" run (verified:
-    # NONE => get_status sends no auth header and still succeeds). In full mode
+    # auto-infer OAUTH and authenticate a "credential-free" run (with
+    # AUTH_STRATEGY=NONE, get_status sends no auth header and still succeeds). In full mode
     # leave auth to auto-infer OAUTH from the credentials.
     config = {"CAMUNDA_REST_ADDRESS": rest_base}
     if not is_full:

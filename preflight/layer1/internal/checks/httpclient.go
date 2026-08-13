@@ -174,8 +174,8 @@ func classifyDialError(err error) (code string, detail string) {
 	case isDNSError(err):
 		return "DNS_FAIL", "hostname did not resolve — DNS split-horizon or no external DNS: " + msg + proxyHint
 	case strings.Contains(lower, "connection refused") || strings.Contains(lower, "actively refused") || strings.Contains(lower, "forbidden by its access permissions"):
-		// Three distinct OS wordings for the same "blocked" outcome, all
-		// confirmed: "connection refused" (Unix/Linux/macOS errno);
+		// Three distinct OS wordings for the same "blocked" outcome:
+		// "connection refused" (Unix/Linux/macOS errno);
 		// Windows connectex/WSAECONNREFUSED "...actively refused it."
 		// (remote-side reject/RST); and Windows WSAEACCES "...forbidden by
 		// its access permissions" (local OS-level block — this is what
