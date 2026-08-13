@@ -80,7 +80,7 @@ separate, common blocker, unrelated to general network connectivity). It
 does real downloads, so it takes a bit longer than the other checks:
 
 ```bash
-./preflight-darwin-amd64 --host <PROVIDED-BY-YOUR-TRAINER> --stacks java --maven-depcheck
+./preflight-darwin-amd64 --host <PROVIDED-BY-YOUR-TRAINING-CONTACT> --stacks java --maven-depcheck
 ```
 
 That's it — one command checks everything you need.

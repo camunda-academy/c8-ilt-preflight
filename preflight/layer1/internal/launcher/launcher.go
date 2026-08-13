@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"c8preflight/internal/model"
+	"c8preflight/internal/redact"
 )
 
 // KnownStacks is the set of stack names accepted by --stacks/--auto.
@@ -83,34 +84,338 @@ func probeEntrypoint(layer2Dir, stack string) string {
 	return filepath.Join(layer2Dir, stack, name)
 }
 
+// RuntimeOverrides pins which runtime INSTALLATION each stack is checked with,
+// instead of accepting whatever PATH happens to offer first.
+//
+// This exists because "the language is installed" is not the question the tool
+// actually needs answered — "the runtime the training exercises will use can
+// reach the cluster" is. Those differ whenever a machine carries more than one
+// JDK, interpreter or Node major, which on a corporate laptop is normal. The
+// same override is applied to Go's own detection AND forwarded to the probe, so
+// the two can never end up describing different installations.
+type RuntimeOverrides struct {
+	JavaHome  string // a JDK directory; its bin/java is used
+	PythonBin string // an interpreter binary
+	NodeBin   string // a node binary
+	DotnetBin string // a dotnet binary
+}
+
+// pinnedValue returns the raw operator-selected path for a stack, or "".
+func (o RuntimeOverrides) pinnedValue(stack string) string {
+	switch stack {
+	case "java":
+		return o.JavaHome
+	case "python":
+		return o.PythonBin
+	case "typescript":
+		return o.NodeBin
+	case "csharp":
+		return o.DotnetBin
+	}
+	return ""
+}
+
+// pinCandidates expands an operator's runtime selection into the concrete
+// binaries worth trying, in preference order.
+//
+// A directory and an executable are both accepted for every stack, because the
+// distinction is an implementation detail nobody should have to remember: a JDK
+// is naturally identified by its home directory while a node binary is
+// naturally a file, and demanding the "right" kind per stack only produces
+// "file does not exist" for a path that plainly exists. Passing a directory also
+// covers how these installations are actually laid out — notably a virtualenv,
+// where the interpreter is under bin/ on Unix and Scripts/ on Windows.
+func (o RuntimeOverrides) pinCandidates(stack string) []string {
+	raw := strings.TrimSpace(o.pinnedValue(stack))
+	if raw == "" {
+		return nil
+	}
+	raw = filepath.Clean(raw)
+	if st, err := os.Stat(raw); err != nil || !st.IsDir() {
+		// Not a directory (or not there at all): treat it as the binary itself
+		// and let the caller report what went wrong.
+		return []string{raw}
+	}
+	var names []string
+	switch stack {
+	case "java":
+		names = []string{"java"}
+	case "python":
+		names = []string{"python3", "python"}
+	case "typescript":
+		names = []string{"node"}
+	case "csharp":
+		names = []string{"dotnet"}
+	}
+	// Layouts, in order: alongside the directory itself (a .NET install root, an
+	// unpacked node dist), under bin/ (a JDK home, a POSIX virtualenv), and under
+	// Scripts/ (a Windows virtualenv).
+	//
+	// Names are left extensionless on purpose: exec.LookPath applies the host's
+	// executable extensions itself, which on Windows means a .cmd/.bat wrapper is
+	// found as readily as a .exe. Corporate-managed toolchains are often exactly
+	// such a wrapper, and hardcoding .exe would quietly refuse them.
+	subdirs := []string{"", "bin", "Scripts"}
+	var out []string
+	for _, sub := range subdirs {
+		for _, name := range names {
+			out = append(out, filepath.Join(raw, sub, name))
+		}
+	}
+	return out
+}
+
 // RuntimeStatus is what the launcher determines for one selected stack
 // before even trying to run a probe.
 type RuntimeStatus struct {
-	Stack         string
-	Present       bool
-	BinaryFound   string // which candidate binary was found on PATH, if any
-	StandaloneCmd string // the exact command an operator could run by hand
+	Stack          string
+	Present        bool
+	BinaryFound    string // which binary was resolved, if any
+	Version        string // as self-reported by that binary, first line
+	Pinned         bool   // resolved from a RuntimeOverrides selection, not PATH
+	UnusableReason string // why a resolved binary could not be used as this runtime
+	StandaloneCmd  string // the exact command an operator could run by hand
 }
 
-// DetectRuntime checks whether a stack's runtime is present on PATH.
-func DetectRuntime(stack string) RuntimeStatus {
+// DetectRuntime resolves which runtime installation a stack will be checked
+// with, and asks it for its version.
+//
+// An operator-pinned selection is honored first and, crucially, is NEVER
+// quietly replaced by a PATH lookup when it turns out to be unusable: falling
+// back would check a different installation than the one that was asked for and
+// report it as though it were the same, which is the exact confusion pinning
+// exists to remove. A broken pin is reported as absent-with-a-reason instead.
+func DetectRuntime(stack string, ov RuntimeOverrides) RuntimeStatus {
 	candidates, known := runtimeBinary[stack]
 	if !known {
 		return RuntimeStatus{Stack: stack, Present: false}
 	}
-	for _, bin := range candidates {
-		if path, err := exec.LookPath(bin); err == nil {
-			return RuntimeStatus{Stack: stack, Present: true, BinaryFound: path}
+	if candidates := ov.pinCandidates(stack); len(candidates) > 0 {
+		for _, candidate := range candidates {
+			path, err := exec.LookPath(candidate)
+			if err != nil {
+				continue
+			}
+			if version, ok := runtimeVersion(path, stack); ok {
+				return RuntimeStatus{
+					Stack: stack, Present: true, BinaryFound: path, Pinned: true, Version: version,
+				}
+			}
+		}
+		return RuntimeStatus{
+			Stack: stack, Present: false, Pinned: true,
+			UnusableReason: pinFailureReason(stack, ov.pinnedValue(stack), candidates),
 		}
 	}
-	return RuntimeStatus{Stack: stack, Present: false}
+	// Existing on disk is not the same as being the runtime. Windows ships an
+	// App Execution Alias stub named python3.exe that is not Python at all — it
+	// exits non-zero telling you to visit the Store — and the official Python
+	// installer only creates python.exe, so on a stock Windows box with Python
+	// properly installed a bare "is python3 on PATH" lookup finds the stub and
+	// reports the runtime as present while every probe using it would fail.
+	// So a candidate only counts once it has identified itself.
+	var rejected []string
+	for _, bin := range candidates {
+		path, err := exec.LookPath(bin)
+		if err != nil {
+			continue
+		}
+		version, ok := runtimeVersion(path, stack)
+		if !ok {
+			// Keep what it said instead of only that it failed: the reply is
+			// usually the whole diagnosis (a Store placeholder announcing itself,
+			// or dotnet refusing because a global.json pins an absent SDK).
+			said := version
+			if said == "" {
+				said = "no output"
+			}
+			rejected = append(rejected, fmt.Sprintf("%s (%s)", redact.MaskHomeDir(path), said))
+			continue
+		}
+		return RuntimeStatus{Stack: stack, Present: true, BinaryFound: path, Version: version}
+	}
+	st := RuntimeStatus{Stack: stack, Present: false}
+	if len(rejected) > 0 {
+		st.UnusableReason = fmt.Sprintf("found a %s runtime on PATH that does not work: %s", stack, strings.Join(rejected, "; ")) + rejectionHint(stack)
+	}
+	return st
+}
+
+// rejectionHint adds the most common per-stack explanation for a runtime that is
+// on PATH yet doesn't work, since the runtime's own message is often terse.
+func rejectionHint(stack string) string {
+	switch stack {
+	case "python":
+		return ". On Windows a python3.exe like this is usually the Microsoft Store placeholder rather than Python itself"
+	case "csharp":
+		return ". A dotnet that refuses to report a version is usually being held to an SDK version that isn't installed by a global.json in scope"
+	default:
+		return ""
+	}
+}
+
+// pinFailureReason explains why an operator's runtime selection couldn't be
+// used, in terms of what was actually looked for.
+//
+// The naive message here is Go's own "file does not exist", which is actively
+// misleading when the path given was a directory that exists perfectly well and
+// simply doesn't hold the binary. Naming the candidates tried turns a dead end
+// into something the reader can act on.
+func pinFailureReason(stack, raw string, candidates []string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(raw))
+	// Masked before use in any message below: an operator's pin is very often a
+	// per-user path (their own home directory, a personal venv), and this text
+	// ends up in a FAIL fragment inside the shareable result JSON.
+	maskedCleaned := redact.MaskHomeDir(cleaned)
+	st, err := os.Stat(cleaned)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("no %s runtime at %s -- that path does not exist", stack, maskedCleaned)
+	case st.IsDir():
+		maskedCandidates := make([]string, len(candidates))
+		for i, c := range candidates {
+			maskedCandidates[i] = redact.MaskHomeDir(c)
+		}
+		return fmt.Sprintf("%s is a directory, and none of the places a %s runtime normally sits inside one held a working "+
+			"executable (looked for: %s). Point at the executable itself if it lives somewhere unusual.",
+			maskedCleaned, stack, strings.Join(maskedCandidates, ", "))
+	default:
+		return fmt.Sprintf("%s exists but does not answer as a working %s runtime -- it may be a placeholder or wrapper "+
+			"rather than the real thing", maskedCleaned, stack)
+	}
+}
+
+// pinMismatchWarning flags the case where the environment plainly points at one
+// runtime installation but a DIFFERENT one is what actually got used — a
+// JAVA_HOME naming one JDK while an earlier PATH entry supplies another, or an
+// activated virtualenv bypassed by a system interpreter.
+//
+// Worth a WARN rather than silence because both installations have their own
+// trust store, so the result describes a runtime the operator didn't think they
+// were testing. Not an error: this layout is often deliberate, and the fix
+// (pinning explicitly) is offered rather than forced.
+func pinMismatchWarning(st RuntimeStatus) (model.ProbeFragment, bool) {
+	if st.Pinned || st.BinaryFound == "" {
+		return model.ProbeFragment{}, false
+	}
+	var envName, pinFlag string
+	switch st.Stack {
+	case "java":
+		envName, pinFlag = "JAVA_HOME", "--java-home"
+	case "python":
+		envName, pinFlag = "VIRTUAL_ENV", "--python-bin"
+	default:
+		return model.ProbeFragment{}, false
+	}
+	root := strings.TrimSpace(os.Getenv(envName))
+	if root == "" || underDir(st.BinaryFound, root) {
+		return model.ProbeFragment{}, false
+	}
+	return model.ProbeFragment{
+		Runtime:    st.Stack,
+		Verdict:    model.VerdictWarn,
+		ErrorClass: model.ErrConfigError,
+		Detail: fmt.Sprintf("%s points at %s, but the %s runtime actually used is %s — these are different installations with "+
+			"separate trust stores, so this check may not reflect the one your exercises run on. Pass %s to pin it explicitly.",
+			envName, redact.MaskHomeDir(root), st.Stack, redact.MaskHomeDir(st.BinaryFound), pinFlag),
+	}, true
+}
+
+// inheritedGlobalJSONWarning reports a global.json in scope for the C# probe's
+// build that the tool didn't put there.
+//
+// `dotnet` resolves global.json from the CURRENT WORKING DIRECTORY upward, not
+// from the project's location (verified: the same build succeeds from outside
+// such a tree and fails with "A compatible .NET SDK was not found" from inside
+// it). So a participant who unpacks this tool inside a checked-out repo or
+// solution folder and runs it there silently hands their SDK pin to our build.
+// If it names an SDK they don't have, the probe dies during build for a reason
+// that has nothing to do with connectivity — so name the file rather than let it
+// surface as an opaque build failure.
+func inheritedGlobalJSONWarning(stack string) (model.ProbeFragment, bool) {
+	if stack != "csharp" {
+		return model.ProbeFragment{}, false
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return model.ProbeFragment{}, false
+	}
+	for {
+		candidate := filepath.Join(dir, "global.json")
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return model.ProbeFragment{
+				Runtime:    stack,
+				Verdict:    model.VerdictWarn,
+				ErrorClass: model.ErrConfigError,
+				Detail: fmt.Sprintf("%s applies to this run: the .NET tooling reads global.json from the working directory upward, "+
+					"so a file you didn't intend for this check can pin which SDK builds it. If the C# check fails to build, "+
+					"try running this tool from a directory outside that project.", redact.MaskHomeDir(candidate)),
+			}, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return model.ProbeFragment{}, false
+		}
+		dir = parent
+	}
+}
+
+// underDir reports whether path sits inside dir, comparing the way the host
+// filesystem does (Windows paths are case-insensitive).
+func underDir(path, dir string) bool {
+	absPath, err1 := filepath.Abs(path)
+	absDir, err2 := filepath.Abs(dir)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// versionArgs is how each runtime is asked to identify itself.
+var versionArgs = map[string][]string{
+	"java":       {"-version"}, // NOT --version: only JDK 9+ accepts that form
+	"python":     {"--version"},
+	"typescript": {"--version"},
+	"csharp":     {"--version"},
+}
+
+// runtimeVersion asks a resolved runtime binary to identify itself. The second
+// return reports whether it answered successfully, which doubles as the check
+// that this binary really is the runtime and not a lookalike on PATH; on
+// failure the string carries whatever it said instead, for the error message.
+//
+// stdout and stderr are read together because the answer isn't consistently on
+// either — `java -version` writes to stderr on JDK 8 and to stdout from 9 on.
+func runtimeVersion(bin, stack string) (string, bool) {
+	args, ok := versionArgs[stack]
+	if !ok {
+		return "", true // unknown stack: nothing to verify against
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	first := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			first = truncate(line, 120)
+			break
+		}
+	}
+	if err != nil {
+		return first, false
+	}
+	return first, true
 }
 
 // SelectStacks resolves the final stack list: explicit --stacks is the
 // default mechanism; --auto scans for any known runtime present on PATH
 // (the unknown-language fallback). Explicit selection wins if both are
 // somehow set, since it is the documented default and more specific.
-func SelectStacks(explicit []string, auto bool) []string {
+func SelectStacks(explicit []string, auto bool, ov RuntimeOverrides) []string {
 	if len(explicit) > 0 {
 		return explicit
 	}
@@ -119,7 +424,7 @@ func SelectStacks(explicit []string, auto bool) []string {
 	}
 	var found []string
 	for _, s := range KnownStacks {
-		if DetectRuntime(s).Present {
+		if DetectRuntime(s, ov).Present {
 			found = append(found, s)
 		}
 	}
@@ -176,10 +481,17 @@ type ProbeConfig struct {
 	// TSProxySupport forwards --ts-proxy-support to CAMUNDA_TS_PROXY_SUPPORT.
 	// Only probe_sdk.js (TypeScript tier 2) reads this -- opt-in because it
 	// swaps the real SDK's own (proxy-blind) fetch for a hand-written
-	// proxy-tunneling override, changing what the check actually exercises
-	// (see the TypeScript notes). Off by default so the tool's
-	// default behavior mirrors the real, unmodified SDK exactly.
+	// proxy-tunneling override, changing what the check actually exercises.
+	// Off by default so the tool's default behavior mirrors the real,
+	// unmodified SDK exactly.
 	TSProxySupport bool
+
+	// Runtimes pins which runtime installation each stack is checked with. Also
+	// forwarded to the probe (CAMUNDA_JAVA_HOME / _PYTHON_BIN / _NODE_BIN /
+	// _DOTNET_BIN) so the run script compiles and executes with the same
+	// installation Go resolved, rather than doing its own PATH lookup and
+	// possibly picking a different one.
+	Runtimes RuntimeOverrides
 }
 
 // onFragment, when non-nil, is called once per fragment AS SOON AS it is
@@ -200,7 +512,7 @@ type ProbeConfig struct {
 // layer2Dir is the path to the preflight/layer2 directory (probes live under
 // <layer2Dir>/<stack>/). pc is the resolved run config forwarded to every
 // probe (see ProbeConfig).
-func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelection bool, pc ProbeConfig, onFragment func(model.ProbeFragment)) (detected []string, skipped []string, probes []model.ProbeFragment) {
+func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelection bool, pc ProbeConfig, onFragment func(model.ProbeFragment)) (detected []string, skipped []string, runtimes []model.RuntimeDetail, probes []model.ProbeFragment) {
 	emit := func(f model.ProbeFragment) {
 		probes = append(probes, f)
 		if onFragment != nil {
@@ -208,26 +520,56 @@ func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelecti
 		}
 	}
 	for _, stack := range stacks {
-		status := DetectRuntime(stack)
+		status := DetectRuntime(stack, pc.Runtimes)
 		entry := probeEntrypoint(layer2Dir, stack)
+
+		// Emitted before the presence check, not after: an inherited SDK pin is
+		// most often the REASON the runtime looks broken or missing, so it has to
+		// accompany that failure rather than only a successful run.
+		if w, ok := inheritedGlobalJSONWarning(stack); ok {
+			emit(w)
+		}
 
 		if !status.Present {
 			if explicitSelection {
 				// Selected-but-absent = loud FAIL, not a silent skip — an operator
 				// who explicitly named this stack needs to know it's missing.
+				// A pin that couldn't be used is its own message: the runtime may
+				// well be installed elsewhere, so "not installed" would misdirect.
+				detail := fmt.Sprintf("selected runtime %q is not installed on this machine — install it, then re-run", stack)
+				switch {
+				case status.Pinned && status.UnusableReason != "":
+					detail = fmt.Sprintf("the %s runtime you selected explicitly could not be used, and no fallback was attempted "+
+						"so this run can't silently check a different installation than the one you asked for: %s", stack, status.UnusableReason)
+				case status.UnusableReason != "":
+					detail = status.UnusableReason
+				}
 				emit(model.ProbeFragment{
 					Runtime:             stack,
 					TrustStoreExercised: "",
 					Target:              "",
 					Verdict:             model.VerdictFail,
 					ErrorClass:          model.ErrRuntimeAbsent,
-					Detail:              fmt.Sprintf("selected runtime %q is not installed on this machine — install it, then re-run", stack),
+					Detail:              detail,
 				})
 			}
 			skipped = append(skipped, stack)
 			continue
 		}
 		detected = append(detected, stack)
+		runtimes = append(runtimes, model.RuntimeDetail{
+			Stack: stack,
+			// Masked: this resolved path routinely runs through a per-user profile
+			// (a pyenv/nvm install, a personal venv), and this field is always in
+			// the result JSON, not just --verbose -- the exact file the tool tells
+			// a participant to send to a third party.
+			Binary:  redact.MaskHomeDir(status.BinaryFound),
+			Version: status.Version,
+			Pinned:  status.Pinned,
+		})
+		if w, ok := pinMismatchWarning(status); ok {
+			emit(w)
+		}
 
 		if entry == "" {
 			// The layer2 probe directory wasn't found next to the executable
@@ -238,7 +580,7 @@ func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelecti
 			// working directory get executed instead.
 			emit(model.ProbeFragment{
 				Runtime: stack, Verdict: model.VerdictSkip, ErrorClass: model.ErrOK,
-				Detail: fmt.Sprintf("runtime present (%s), but the layer2 probe directory was not found next to the executable — ship layer2/ alongside the binary, or set CAMUNDA_LAYER2_DIR", status.BinaryFound),
+				Detail: fmt.Sprintf("runtime present (%s), but the layer2 probe directory was not found next to the executable — ship layer2/ alongside the binary, or set CAMUNDA_LAYER2_DIR", redact.MaskHomeDir(status.BinaryFound)),
 			})
 			continue
 		}
@@ -263,7 +605,7 @@ func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelecti
 		// produces it -- not via emit(), which would call it a second time.
 		probes = append(probes, invokeProbes(ctx, stack, entry, pc, onFragment)...)
 	}
-	return detected, skipped, probes
+	return detected, skipped, runtimes, probes
 }
 
 // probeEnv builds the environment for a probe process: the parent environment,
@@ -285,6 +627,11 @@ func probeEnv(pc ProbeConfig) []string {
 
 		"CAMUNDA_MAVEN_MIRROR":   pc.MavenMirror,
 		"CAMUNDA_MAVEN_SETTINGS": pc.MavenSettings,
+
+		"CAMUNDA_JAVA_HOME":  pc.Runtimes.JavaHome,
+		"CAMUNDA_PYTHON_BIN": pc.Runtimes.PythonBin,
+		"CAMUNDA_NODE_BIN":   pc.Runtimes.NodeBin,
+		"CAMUNDA_DOTNET_BIN": pc.Runtimes.DotnetBin,
 	}
 	if pc.MavenDepcheck {
 		overrides["CAMUNDA_MAVEN_DEPCHECK"] = "1"
@@ -446,6 +793,28 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 	runErr := cmd.Wait()
 
 	if len(frags) > 0 {
+		// Every probe exits non-zero for exactly one reason: it emitted a
+		// fragment whose verdict is neither PASS, WARN nor SKIP. So a non-zero
+		// exit with no failing fragment among what we parsed means a tier died
+		// BEFORE it could emit anything — a broken compile/build step, or the
+		// process being killed on timeout mid-run — and the exit code is the
+		// only evidence left. Surface it, because the alternative is a
+		// false green: a stack whose mandatory trust tier never ran, but whose
+		// optional SDK tier cleanly SKIPped, would otherwise report that single
+		// SKIP and the whole run would print "All checks passed."
+		if runErr != nil && !reportsFailure(frags) {
+			partial := model.ProbeFragment{
+				Runtime:    stack,
+				Verdict:    model.VerdictProbeError,
+				ErrorClass: model.ErrProbeCrashed,
+				Detail: fmt.Sprintf("probe exited with error (%v) but reported no failing check — at least one of its checks died before producing a result, "+
+					"so this stack was only partially verified (stderr: %s)", runErr, truncate(stderr.String(), 300)),
+			}
+			frags = append(frags, partial)
+			if onFragment != nil {
+				onFragment(partial)
+			}
+		}
 		return frags
 	}
 
@@ -467,6 +836,20 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 		onFragment(fallback)
 	}
 	return []model.ProbeFragment{fallback}
+}
+
+// reportsFailure reports whether a probe's own fragments already account for a
+// non-zero exit code, i.e. whether at least one of them carries a verdict that
+// makes every probe exit non-zero (FAIL or probe-error). Used to tell "the
+// probe exited non-zero because it correctly found a problem" apart from "the
+// probe exited non-zero for a reason it never managed to report".
+func reportsFailure(frags []model.ProbeFragment) bool {
+	for _, f := range frags {
+		if f.Verdict == model.VerdictFail || f.Verdict == model.VerdictProbeError {
+			return true
+		}
+	}
+	return false
 }
 
 // parseFragments reads every non-blank line of a probe's stdout and keeps

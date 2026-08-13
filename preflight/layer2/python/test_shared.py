@@ -77,8 +77,8 @@ class NormalizeRestBaseTest(unittest.TestCase):
 
 class ResolveIsFullTest(unittest.TestCase):
     def test_explicit_network_is_never_full_even_with_creds(self):
-        # The exact bug the user caught: creds in env must NOT trigger an
-        # authenticated topology call when the run is explicitly network mode.
+        # Regression guard: creds in env must NOT trigger an authenticated
+        # topology call when the run is explicitly network mode.
         self.assertFalse(_shared.resolve_is_full("network", True))
         self.assertFalse(_shared.resolve_is_full("network", False))
 

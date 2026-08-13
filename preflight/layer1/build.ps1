@@ -47,4 +47,4 @@ Write-Host "Done. Artifacts + checksums in ${ReleasesDir}:"
 Get-Content $ChecksumFile
 Write-Host ""
 Write-Host "NOTE: artifacts are UNSIGNED (code-signing is a deferred follow-up)."
-Write-Host "Use the checksums above for an allowlist-by-hash rule."
+Write-Host "Until then, the checksums above are what an allowlist-by-hash rule should reference."

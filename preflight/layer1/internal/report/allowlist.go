@@ -11,8 +11,7 @@ import (
 // AllowlistBlock renders a "send this to your network team" summary,
 // generated from the resolved target rather than reading an external file
 // at runtime — so the binary stays self-contained and the block is always
-// accurate for the region actually being tested. See the firewall allowlist
-// for the full, human-maintained reference document.
+// accurate for the region actually being tested.
 func AllowlistBlock(t hostset.Target, webComponents []checks.WebComponentHost) string {
 	var b strings.Builder
 	b.WriteString("\n--- Firewall allowlist (send this to your network team) ---\n")
@@ -25,6 +24,6 @@ func AllowlistBlock(t hostset.Target, webComponents []checks.WebComponentHost) s
 	for _, wc := range webComponents {
 		fmt.Fprintf(&b, "  %s\n", wc.Host)
 	}
-	b.WriteString("\nAsk your training contact if you need the full reference, including gRPC and wildcard guidance.\n")
+	b.WriteString("\nAsk your training contact if you need the full reference, including gRPC and training-group wildcard guidance.\n")
 	return b.String()
 }

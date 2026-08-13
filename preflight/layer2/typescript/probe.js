@@ -73,7 +73,7 @@ const OAUTH_HOST = 'login.cloud.camunda.io';
 
 const USAGE = `Layer 2 native trust probe -- TypeScript/Node.js.
 Standalone: node preflight/layer2/typescript/probe.js
-See the training documentation's TypeScript section for env vars.`;
+Supported env vars are listed in this probe's source header.`;
 
 function resolveTargets() {
   return [
@@ -120,7 +120,7 @@ async function probeTarget(host, port, trust, proxyUrl) {
         target,
         'FAIL',
         'TLS_HANDSHAKE_FAIL',
-        'certificate not trusted by ' + trust.label + ': ' + (e.message || e) + ' -- likely a TLS-intercepting proxy; import its root CA via CAMUNDA_MTLS_CA_PATH (see the training documentation)',
+        'certificate not trusted by ' + trust.label + ': ' + (e.message || e) + ' -- likely a TLS-intercepting proxy; import its root CA via CAMUNDA_MTLS_CA_PATH',
         trust.label
       );
     }

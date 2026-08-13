@@ -58,7 +58,8 @@ SDK_SPEC = "camunda-orchestration-sdk==%s" % SDK_VERSION
 # poisoning (an attacker publishing camunda-orchestration-sdk==9.0.1 to an
 # internal index pip happens to prefer). Not shipped by default because a
 # cross-platform hash lock (pydantic-core etc. have per-OS binary wheels) must
-# be generated per environment; see the training documentation for how to produce one.
+# be generated per environment (e.g. `pip-compile --generate-hashes`) rather
+# than committed once and assumed portable.
 LOCK_FILENAME = "requirements.lock"
 INSTALL_TIMEOUT_SECONDS = 90
 
@@ -116,7 +117,7 @@ def install_sdk():
         install_args = [SDK_SPEC]
         eprint("[python sdk-probe] SECURITY: installing %s from pip's configured index — version-pinned but NOT" % SDK_SPEC)
         eprint("[python sdk-probe] hash-verified. On an untrusted network, pre-install the SDK from a trusted source")
-        eprint("[python sdk-probe] instead, or drop a hash-locked %s next to this probe (see the training documentation)." % LOCK_FILENAME)
+        eprint("[python sdk-probe] instead, or drop a hash-locked %s next to this probe." % LOCK_FILENAME)
 
     last_detail = "pip install did not complete"
     for extra_args in ([], ["--user"]):
@@ -139,8 +140,7 @@ def install_sdk():
 def trust_store_label():
     # Kept short and plain-language deliberately -- this ends up in the
     # customer-facing result (Notes/FAIL details), not just an engineering
-    # log. The certifi-vs-OS-store base-switch nuance is documented in
-    # the training documentation.md for trainers, not repeated here every run.
+    # log.
     import os
 
     custom_ca = os.environ.get("CAMUNDA_MTLS_CA_PATH", "").strip()
@@ -163,7 +163,7 @@ def run_checks(sdk_mod, sdk_errors):
     # makes the SDK probe test the same endpoint Layer 1 does, instead of a
     # false-red 404. When the raw form needed fixing we still WARN, because a
     # participant hand-configuring the SDK from that same Console string would
-    # hit the identical opaque 404 (see the training documentation).
+    # hit the identical opaque 404.
     rest_base, host, was_normalized = normalize_rest_base()
     # Emit the normalization notice only in verbose mode: it's useful to the
     # operator/trainer but confusing noise for a participant (the normalization
@@ -199,7 +199,7 @@ def run_checks(sdk_mod, sdk_errors):
     # the SDK's own debug logger prints an unmasked "OAuth token request:
     # ... client_id=<value>" line to stderr on every authenticated call, and
     # setting CAMUNDA_SDK_LOG_LEVEL=silent does NOT suppress it (a real gap
-    # in the SDK, worth reporting upstream — see the training documentation). Only passing
+    # in the SDK, worth reporting upstream). Only passing
     # logger=NullLogger() explicitly stops it.
     # Redaction requires this: never let a client ID reach stderr in the
     # clear, even though it isn't the client SECRET.

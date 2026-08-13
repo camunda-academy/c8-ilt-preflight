@@ -103,3 +103,53 @@ func TestTruncate_DoesNotSplitMultiByteRune(t *testing.T) {
 		t.Fatal("Truncate returned nothing")
 	}
 }
+
+// TestMaskHomeDir covers the common case: a resolved binary
+// path routinely runs through a per-user profile directory -- a pyenv/nvm
+// install, a Windows Store App Execution Alias, a personal venv -- and that
+// path is always in the result JSON, not just --verbose. 
+func TestMaskHomeDir(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{
+			"windows store alias",
+			`C:\Users\jsmith\AppData\Local\Microsoft\WindowsApps\python3.exe`,
+			`C:\Users\<redacted-user>\AppData\Local\Microsoft\WindowsApps\python3.exe`,
+		},
+		{"windows jdk home", `C:\Users\jsmith\.jdks\jdk-21\bin\java.exe`, `C:\Users\<redacted-user>\.jdks\jdk-21\bin\java.exe`},
+		{"macos", `/Users/jsmith/.pyenv/versions/3.11/bin/python`, `/Users/<redacted-user>/.pyenv/versions/3.11/bin/python`},
+		{"linux", `/home/jsmith/.nvm/versions/node/v22/bin/node`, `/home/<redacted-user>/.nvm/versions/node/v22/bin/node`},
+		{"wsl", `/mnt/c/Users/jsmith/venv/Scripts/python.exe`, `/mnt/c/Users/<redacted-user>/venv/Scripts/python.exe`},
+		{"no home dir segment", `C:\Program Files\dotnet\dotnet.exe`, `C:\Program Files\dotnet\dotnet.exe`},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		if got := MaskHomeDir(c.in); got != c.want {
+			t.Errorf("%s: MaskHomeDir(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// TestMaskProxyValue guards the two properties that actually matter: presence
+// of a proxy is never hidden (an empty input must stay empty, or "no proxy"
+// becomes indistinguishable from "a proxy, hidden"), and a non-empty value
+// never leaks any part of the real host/IP into the placeholder.
+func TestMaskProxyValue(t *testing.T) {
+	if got := MaskProxyValue(""); got != "" {
+		t.Errorf(`MaskProxyValue("") = %q, want "" -- absence of a proxy must not be masked`, got)
+	}
+	for _, raw := range []string{
+		"http://proxy.internal.corp:8080",
+		"10.20.30.40:3128",
+		"http=proxy:80;https=proxy:8080",
+	} {
+		got := MaskProxyValue(raw)
+		if got == raw {
+			t.Errorf("MaskProxyValue(%q) returned the value unchanged", raw)
+		}
+		if strings.Contains(got, "proxy.internal.corp") || strings.Contains(got, "10.20.30.40") {
+			t.Errorf("MaskProxyValue(%q) = %q leaked part of the real value", raw, got)
+		}
+	}
+}

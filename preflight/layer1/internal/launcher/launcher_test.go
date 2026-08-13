@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -98,9 +99,10 @@ func TestProbeEnv_KeepsCredsInFullMode(t *testing.T) {
 	}
 }
 
-// TestProbeEntrypoint_EmptyDirReturnsEmpty is the regression test for finding
-// #6: an empty layer2Dir must NOT become a CWD-relative path that os.Stat/exec
-// would resolve against the current directory.
+// TestProbeEntrypoint_EmptyDirReturnsEmpty guards against a real security bug:
+// an empty layer2Dir must NOT become a CWD-relative path that os.Stat/exec
+// would resolve against the current directory, which would let a planted
+// script in an untrusted working directory get executed.
 func TestProbeEntrypoint_EmptyDirReturnsEmpty(t *testing.T) {
 	if got := probeEntrypoint("", "java"); got != "" {
 		t.Errorf("probeEntrypoint(\"\", ...) = %q, want \"\" (never a CWD-relative path)", got)
@@ -304,10 +306,165 @@ func TestInvokeProbes_StreamsFragmentsViaCallback(t *testing.T) {
 	}
 }
 
+// TestInvokeProbes_PartialRunIsNotSilentlyGreen guards against the worst
+// failure mode this tool can have: reporting success for a stack that was only
+// half-checked. A run script runs several tiers and exits non-zero if any of
+// them failed, but a tier whose compile/build step dies emits NO fragment at
+// all — only stderr. Since a probe exits non-zero only when it emitted a
+// FAIL/probe-error fragment, a non-zero exit with nothing failing among the
+// parsed fragments means exactly that, and must not be swallowed.
+//
+// Reproduces a real field report: the C# stack's mandatory trust tier failed to
+// build, its optional SDK tier cleanly SKIPped, and the run printed
+// "All checks passed."
+func TestInvokeProbes_PartialRunIsNotSilentlyGreen(t *testing.T) {
+	entry := writeTestProbeExit(t, 1, "dotnet build of Probe.csproj failed",
+		`{"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"not resolved"}`,
+	)
+
+	var streamed []model.ProbeFragment
+	frags := invokeProbes(context.Background(), "csharp", entry, ProbeConfig{Mode: "network"}, func(f model.ProbeFragment) {
+		streamed = append(streamed, f)
+	})
+
+	if len(frags) != 2 {
+		t.Fatalf("got %d fragments, want 2 (the SKIP plus a synthesized probe-error): %+v", len(frags), frags)
+	}
+	got := frags[1]
+	if got.Verdict != model.VerdictProbeError || got.ErrorClass != model.ErrProbeCrashed {
+		t.Errorf("synthesized fragment: got verdict=%q errorClass=%q, want probe-error/PROBE_CRASHED", got.Verdict, got.ErrorClass)
+	}
+	if got.Runtime != "csharp" {
+		t.Errorf("synthesized fragment runtime: got %q, want %q", got.Runtime, "csharp")
+	}
+	if !strings.Contains(got.Detail, "dotnet build of Probe.csproj failed") {
+		t.Errorf("synthesized fragment must carry the probe's stderr so the failure is diagnosable; got detail: %q", got.Detail)
+	}
+	// The whole point is that the operator SEES it, not just that it lands in
+	// the returned slice.
+	if len(streamed) != 2 {
+		t.Fatalf("got %d streamed fragments, want 2: %+v", len(streamed), streamed)
+	}
+}
+
+// TestInvokeProbes_CleanFailNotDoubleReported is the other half of the guard
+// above: a probe that exits non-zero BECAUSE it correctly reported a FAIL has
+// already accounted for its exit code, so no extra probe-error may be invented
+// on top of it.
+func TestInvokeProbes_CleanFailNotDoubleReported(t *testing.T) {
+	entry := writeTestProbeExit(t, 1, "",
+		`{"runtime":"python","trustStoreExercised":"certifi","target":"a:443","verdict":"FAIL","errorClass":"TLS_HANDSHAKE_FAIL","detail":"untrusted"}`,
+	)
+
+	frags := invokeProbes(context.Background(), "python", entry, ProbeConfig{Mode: "network"}, nil)
+
+	if len(frags) != 1 {
+		t.Fatalf("got %d fragments, want exactly 1 (the FAIL, with nothing synthesized): %+v", len(frags), frags)
+	}
+	if frags[0].Verdict != model.VerdictFail {
+		t.Errorf("got verdict %q, want FAIL", frags[0].Verdict)
+	}
+}
+
+// TestDetectRuntime_PinnedMissingNeverFallsBackToPath locks in the whole point
+// of pinning: if the operator names an installation and it can't be used, the
+// run must say so, NOT quietly check whatever PATH offers instead. A fallback
+// here would report a different JDK/interpreter's trust store as though it were
+// the requested one.
+func TestDetectRuntime_PinnedMissingNeverFallsBackToPath(t *testing.T) {
+	st := DetectRuntime("java", RuntimeOverrides{JavaHome: filepath.Join(t.TempDir(), "no-such-jdk")})
+
+	if st.Present {
+		t.Error("a pinned JDK that does not exist must not be reported present")
+	}
+	if !st.Pinned {
+		t.Error("status must record that this came from an explicit pin, so the message can say so")
+	}
+	if st.UnusableReason == "" {
+		t.Error("must explain why the pin was unusable")
+	}
+	if st.BinaryFound != "" {
+		t.Errorf("must not resolve some other binary as a fallback; got %q", st.BinaryFound)
+	}
+}
+
+// TestDetectRuntime_RejectsBinaryThatIsNotTheRuntime covers the Windows
+// python3.exe App Execution Alias: a file that exists on PATH, is executable,
+// and is not Python — it exits non-zero telling you to install from the Store.
+// Presence on disk therefore cannot be the test; the candidate has to identify
+// itself successfully or it doesn't count.
+func TestDetectRuntime_RejectsBinaryThatIsNotTheRuntime(t *testing.T) {
+	fake := writeFakeBinary(t, "python3", 49, "Python was not found; run without arguments to install from the Microsoft Store")
+
+	st := DetectRuntime("python", RuntimeOverrides{PythonBin: fake})
+
+	if st.Present {
+		t.Error("a binary that fails to identify itself must not count as the runtime present")
+	}
+	if st.UnusableReason == "" {
+		t.Error("must explain that the binary exists but is not a working runtime")
+	}
+}
+
+// TestDetectRuntime_PinnedRuntimeIsUsed is the positive case: a pinned binary
+// that answers normally is used, recorded, and marked as explicitly selected.
+func TestDetectRuntime_PinnedRuntimeIsUsed(t *testing.T) {
+	fake := writeFakeBinary(t, "python", 0, "Python 3.11.9")
+
+	st := DetectRuntime("python", RuntimeOverrides{PythonBin: fake})
+
+	if !st.Present || !st.Pinned {
+		t.Fatalf("pinned working runtime should be present and marked pinned; got %+v", st)
+	}
+	if st.Version != "Python 3.11.9" {
+		t.Errorf("version = %q, want the binary's self-reported first line", st.Version)
+	}
+}
+
+func TestUnderDir(t *testing.T) {
+	base := t.TempDir()
+	if !underDir(filepath.Join(base, "bin", "java"), base) {
+		t.Error("a path inside the directory should be reported as under it")
+	}
+	if underDir(filepath.Join(base, "..", "elsewhere", "java"), base) {
+		t.Error("a sibling path must not be reported as under the directory")
+	}
+}
+
+// writeFakeBinary creates an executable that prints one line and exits with the
+// given code — a stand-in for a runtime (or, with a non-zero code, for a
+// lookalike that isn't one).
+func writeFakeBinary(t *testing.T, name string, exitCode int, line string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, name+".cmd")
+		script := "@echo off\r\necho " + line + "\r\nexit /b " + fmt.Sprint(exitCode) + "\r\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\necho '" + line + "'\nexit " + fmt.Sprint(exitCode) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // writeTestProbe writes a minimal standalone probe entrypoint (matching the
 // real run.sh/run.cmd convention: one JSON fragment per line on stdout) that
 // invokeProbes can exec directly, and returns its path.
 func writeTestProbe(t *testing.T, lines ...string) string {
+	t.Helper()
+	return writeTestProbeExit(t, 0, "", lines...)
+}
+
+// writeTestProbeExit is writeTestProbe plus control over the entrypoint's exit
+// code and one line of stderr, so the launcher's exit-code classification can
+// be tested against the real run.sh/run.cmd shape.
+func writeTestProbeExit(t *testing.T, exitCode int, stderrLine string, lines ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	if runtime.GOOS == "windows" {
@@ -316,6 +473,10 @@ func writeTestProbe(t *testing.T, lines ...string) string {
 		for _, l := range lines {
 			script += "echo " + l + "\r\n"
 		}
+		if stderrLine != "" {
+			script += "echo " + stderrLine + " 1>&2\r\n"
+		}
+		script += fmt.Sprintf("exit /b %d\r\n", exitCode)
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -326,6 +487,10 @@ func writeTestProbe(t *testing.T, lines ...string) string {
 	for _, l := range lines {
 		script += "echo '" + l + "'\n"
 	}
+	if stderrLine != "" {
+		script += "echo '" + stderrLine + "' >&2\n"
+	}
+	script += fmt.Sprintf("exit %d\n", exitCode)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -365,5 +530,169 @@ func TestParseFragments_RequiresNonEmptyRuntime(t *testing.T) {
 	frags := parseFragments(stdout)
 	if len(frags) != 0 {
 		t.Fatalf("got %d fragments, want 0 (missing runtime field)", len(frags))
+	}
+}
+
+// TestPinCandidates_AcceptsDirectoryOrBinary covers the usability trap that a
+// pin is naturally a directory for some runtimes (a JDK home, a virtualenv) and
+// a file for others (a node binary). Both must be accepted for every stack, and
+// a directory has to expand to the layouts these installations really use --
+// including Scripts/ for a Windows virtualenv, which is where a venv pin lands.
+func TestPinCandidates_AcceptsDirectoryOrBinary(t *testing.T) {
+	dir := t.TempDir()
+	got := RuntimeOverrides{PythonBin: dir}.pinCandidates("python")
+	if len(got) == 0 {
+		t.Fatal("a directory pin must expand to candidate binaries, got none")
+	}
+	var sawBin, sawScripts bool
+	for _, c := range got {
+		if strings.Contains(c, string(filepath.Separator)+"bin"+string(filepath.Separator)) {
+			sawBin = true
+		}
+		if strings.Contains(c, string(filepath.Separator)+"Scripts"+string(filepath.Separator)) {
+			sawScripts = true
+		}
+	}
+	if !sawBin || !sawScripts {
+		t.Errorf("directory pin must cover POSIX bin/ and Windows Scripts/ virtualenv layouts; got %v", got)
+	}
+
+	// A path that isn't a directory is taken as the binary itself, unchanged.
+	file := filepath.Join(dir, "node")
+	if err := os.WriteFile(file, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := (RuntimeOverrides{NodeBin: file}).pinCandidates("typescript"); len(got) != 1 || got[0] != filepath.Clean(file) {
+		t.Errorf("a binary pin should pass through unchanged; got %v", got)
+	}
+}
+
+// TestDetectRuntime_DirectoryPinResolvesBinary is the end of that path: pointing
+// at a directory finds the executable inside it.
+func TestDetectRuntime_DirectoryPinResolvesBinary(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "java"
+	script := "#!/bin/sh\necho 'openjdk version \"17.0.1\"'\n"
+	if runtime.GOOS == "windows" {
+		name, script = "java.cmd", "@echo off\r\necho openjdk version \"17.0.1\"\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	st := DetectRuntime("java", RuntimeOverrides{JavaHome: home})
+
+	if !st.Present || !st.Pinned {
+		t.Fatalf("directory pin should resolve to the binary under bin/; got %+v", st)
+	}
+	if !strings.Contains(st.Version, "17.0.1") {
+		t.Errorf("version = %q, want it to carry 17.0.1", st.Version)
+	}
+}
+
+// TestPinFailureReason_DistinguishesDirectoryFromMissing guards the message
+// itself: reporting "file does not exist" for a directory that plainly does
+// exist is what sent a real user looking in the wrong place.
+func TestPinFailureReason_DistinguishesDirectoryFromMissing(t *testing.T) {
+	dir := t.TempDir()
+	got := pinFailureReason("csharp", dir, []string{filepath.Join(dir, "dotnet.exe")})
+	if !strings.Contains(got, "is a directory") || !strings.Contains(got, "dotnet.exe") {
+		t.Errorf("a directory pin must be named as such and list what was sought; got %q", got)
+	}
+
+	missing := filepath.Join(dir, "not-there")
+	if got := pinFailureReason("csharp", missing, []string{missing}); !strings.Contains(got, "does not exist") {
+		t.Errorf("a missing path should say so; got %q", got)
+	}
+}
+
+// TestInheritedGlobalJSONWarning covers the C#-only case where the .NET tooling
+// picks up an SDK pin from the working directory upward -- which routinely
+// presents as "dotnet is broken", so the file has to be named.
+func TestInheritedGlobalJSONWarning(t *testing.T) {
+	root := t.TempDir()
+	sub := filepath.Join(root, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "global.json"), []byte(`{"sdk":{"version":"6.0.100"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// os.Chdir rather than t.Chdir: the module targets go1.22, and t.Chdir needs
+	// 1.24 -- not worth raising the floor customers build against for a test.
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+
+	frag, ok := inheritedGlobalJSONWarning("csharp")
+	if !ok {
+		t.Fatal("a global.json above the working directory must be reported for csharp")
+	}
+	if frag.Verdict != model.VerdictWarn || frag.ErrorClass != model.ErrConfigError {
+		t.Errorf("got %s/%s, want WARN/CONFIG_ERROR", frag.Verdict, frag.ErrorClass)
+	}
+	if !strings.Contains(frag.Detail, "global.json") {
+		t.Errorf("detail must name the file; got %q", frag.Detail)
+	}
+	// Only C# reads global.json; warning other stacks would be noise.
+	if _, ok := inheritedGlobalJSONWarning("java"); ok {
+		t.Error("global.json is a .NET concern and must not be reported for java")
+	}
+}
+
+// TestRun_MasksHomeDirInRuntimeDetail is the wiring test for MaskHomeDir: the
+// pure function is tested directly in the redact package, but this proves
+// Run() actually calls it before RuntimeDetail.Binary reaches the caller --
+// the field that lands in the result JSON unconditionally, not just under
+// --verbose. Reproduces the real shape a live run produced (a per-user
+// install directory) rather than an synthetic path unlikely to occur.
+func TestRun_MasksHomeDirInRuntimeDetail(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "Users", "realname")
+	binDir := filepath.Join(home, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binName := "python"
+	binScript := "#!/bin/sh\necho 'Python 3.11.0'\n"
+	if runtime.GOOS == "windows" {
+		binName, binScript = "python.cmd", "@echo off\r\necho Python 3.11.0\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(binDir, binName), []byte(binScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	layer2Dir := t.TempDir()
+	stackDir := filepath.Join(layer2Dir, "python")
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entryName, entryScript := "run.sh", "#!/bin/sh\necho '{\"runtime\":\"python\",\"trustStoreExercised\":\"\",\"target\":\"a\",\"verdict\":\"PASS\",\"errorClass\":\"OK\",\"detail\":\"ok\"}'\n"
+	if runtime.GOOS == "windows" {
+		entryName, entryScript = "run.cmd", "@echo off\r\necho {\"runtime\":\"python\",\"trustStoreExercised\":\"\",\"target\":\"a\",\"verdict\":\"PASS\",\"errorClass\":\"OK\",\"detail\":\"ok\"}\r\n"
+	}
+	if err := os.WriteFile(filepath.Join(stackDir, entryName), []byte(entryScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, runtimes, _ := Run(context.Background(), layer2Dir, []string{"python"}, true,
+		ProbeConfig{Mode: "network", Runtimes: RuntimeOverrides{PythonBin: filepath.Join(binDir, binName)}}, nil)
+
+	if len(runtimes) != 1 {
+		t.Fatalf("got %d runtime details, want 1: %+v", len(runtimes), runtimes)
+	}
+	if strings.Contains(runtimes[0].Binary, "realname") {
+		t.Errorf("RuntimeDetail.Binary leaked the real username: %q", runtimes[0].Binary)
+	}
+	if !strings.Contains(runtimes[0].Binary, "<redacted-user>") {
+		t.Errorf("RuntimeDetail.Binary should carry the masked placeholder; got %q", runtimes[0].Binary)
 	}
 }

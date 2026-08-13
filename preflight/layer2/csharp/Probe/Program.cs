@@ -55,7 +55,8 @@ const string OauthHost = "login.cloud.camunda.io";
 
 const string Usage = "Layer 2 native trust probe -- C#/.NET.\n" +
     "Standalone: dotnet build Probe.csproj -c Release -o out && dotnet out/Probe.dll\n" +
-    "See the training documentation's C# / .NET section for env vars.";
+    "Targets whichever .NET major the installed SDK provides; override with -p:TargetFramework=netX.0.\n" +
+    "Supported env vars are listed in this probe's source header.";
 
 if (Array.IndexOf(args, "-h") >= 0 || Array.IndexOf(args, "--help") >= 0)
 {
@@ -162,7 +163,7 @@ async Task<string> ProbeTargetAsync(string host, int port, Shared.TrustContext t
                     "FAIL",
                     "TLS_HANDSHAKE_FAIL",
                     $"certificate not trusted by {trust.Label}: {e.Message} -- likely a TLS-intercepting proxy; " +
-                    "import its root CA via CAMUNDA_MTLS_CA_PATH (see the training documentation)",
+                    "import its root CA via CAMUNDA_MTLS_CA_PATH",
                     trust.Label);
             }
             return Shared.EmitFragment(target, "FAIL", errorClass, detail, trust.Label);

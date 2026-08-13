@@ -66,14 +66,29 @@ func run(argv []string) int {
 	// suggest "try --proxy" when no proxy is already active for this run.
 	checks.SetProxyConfigured(detectedProxy != "")
 
+	// Read separately from detectedProxy, and never folded into it: this is what
+	// the OS has configured, not what this run used.
+	systemProxy := checks.DetectSystemProxy()
+
+	// Presence is always shown; the hostname/IP itself is masked by default
+	// (see UnmaskedHostnames' doc comment) — computed once here and reused for
+	// both the persisted Target fields and the WARN below, so the two can never
+	// disagree about whether this run reveals the real value.
+	detectedProxyDisplay := detectedProxy
+	systemProxyDisplay := systemProxy.Summary()
+	if !cfg.UnmaskedHostnames {
+		detectedProxyDisplay = redact.MaskProxyValue(detectedProxyDisplay)
+		systemProxyDisplay = redact.MaskProxyValue(systemProxyDisplay)
+	}
+
 	result := model.Result{
-		SchemaVersion: model.SchemaVersion,
-		ToolVersion:   ToolVersion,
-		Mode:          cfg.Mode,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339),
-		OS:            runtime.GOOS,
-		Arch:          runtime.GOARCH,
-		CohortID:      cfg.CohortID,
+		SchemaVersion:   model.SchemaVersion,
+		ToolVersion:     ToolVersion,
+		Mode:            cfg.Mode,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		TrainingGroupID: cfg.TrainingGroupID,
 		// Non-nil so a --skip-transport run (which never calls add()) still
 		// marshals "stages": [] rather than null — a nil Go slice serializes
 		// as JSON null, which downstream consumers must not have to special-case.
@@ -85,7 +100,8 @@ func run(argv []string) int {
 			ZeebeHost:     cfg.Target.ZeebeHost,
 			OAuthHost:     cfg.Target.OAuthHost,
 			ResolvedIPs:   map[string][]string{},
-			DetectedProxy: detectedProxy,
+			DetectedProxy: detectedProxyDisplay,
+			SystemProxy:   systemProxyDisplay,
 		},
 	}
 	switch {
@@ -125,6 +141,27 @@ func run(argv []string) int {
 	// network stage can take 10-30s each; printing nothing until the whole
 	// run finishes is indistinguishable from a hang.
 	fmt.Print(secrets.Scrub(report.Header(result)))
+
+	// A proxy the OS has configured but this run did not use means the checks
+	// below travel a different path than the training tooling will: .NET follows
+	// the system settings, so a green result here can coexist with a C# exercise
+	// that routes somewhere else entirely. Reported before the checks run, so the
+	// reader has that caveat in hand while reading them.
+	//
+	// WARN rather than FAIL: reaching the cluster directly is a perfectly valid
+	// outcome even with a proxy configured, and on this evidence the tool cannot
+	// tell whether the proxy is required, optional, or destination-specific.
+	if systemProxy.Configured && detectedProxy == "" {
+		add(model.Stage{
+			Name:            "proxy-config",
+			Verdict:         model.VerdictWarn,
+			RemediationCode: model.ErrConfigError,
+			Detail: "this machine has a system proxy configured (" + systemProxyDisplay + "), but the checks in this run " +
+				"connected directly, because they follow the HTTP_PROXY/HTTPS_PROXY environment variables and neither is set. " +
+				"The .NET tooling reads the system setting instead, so C# exercises may take a different route than the results below. " +
+				"To test the proxied path, re-run with --proxy pointing at it.",
+		})
+	}
 
 	// webComponents is needed later for the firewall-allowlist block regardless
 	// of whether the transport checks that exercise them run, so compute it up
@@ -183,7 +220,13 @@ func run(argv []string) int {
 	}
 
 	// --- Layer 2 launcher ---
-	stacks := launcher.SelectStacks(cfg.Stacks, cfg.AutoDetect)
+	runtimeOverrides := launcher.RuntimeOverrides{
+		JavaHome:  cfg.JavaHome,
+		PythonBin: cfg.PythonBin,
+		NodeBin:   cfg.NodeBin,
+		DotnetBin: cfg.DotnetBin,
+	}
+	stacks := launcher.SelectStacks(cfg.Stacks, cfg.AutoDetect, runtimeOverrides)
 	explicitSelection := len(cfg.Stacks) > 0
 	layer2Dir := findLayer2Dir()
 	// Forward the fully-resolved config so probes hit the same target/path.
@@ -207,6 +250,7 @@ func run(argv []string) int {
 		MavenSettings:          cfg.MavenSettings,
 		MavenCentralOnly:       cfg.MavenCentralOnly,
 		TSProxySupport:         cfg.TSProxySupport,
+		Runtimes:               runtimeOverrides,
 	}
 	// Print the header BEFORE any probe runs, and stream each fragment the
 	// moment it's produced (rather than collecting everything and printing
@@ -229,10 +273,20 @@ func run(argv []string) int {
 		}
 		fmt.Print(secrets.Scrub(report.ProbeLine(p)))
 	}
-	detected, skipped, probes := launcher.Run(ctx, layer2Dir, stacks, explicitSelection, probeCfg, onProbeFragment)
+	detected, skipped, runtimes, probes := launcher.Run(ctx, layer2Dir, stacks, explicitSelection, probeCfg, onProbeFragment)
 	result.RuntimesDetected = detected
 	result.RuntimesSkipped = skipped
+	result.Runtimes = runtimes
 	result.Probes = probes
+	// Which runtime version each stack was checked with is shown by default: a
+	// Layer 2 verdict is only meaningful against a specific installation, so on a
+	// machine with several of them the reader would otherwise have to assume.
+	// The resolved paths are the part kept for --verbose (and the result file,
+	// always) — they're what tells two same-version installations apart.
+	fmt.Print(report.RuntimesUsedLine(runtimes))
+	if cfg.Verbose {
+		fmt.Print(report.RuntimeDetailLines(runtimes))
+	}
 	fmt.Print(report.RuntimesSkippedLine(skipped))
 
 	// --- Overall + output ---
@@ -268,7 +322,7 @@ func run(argv []string) int {
 		return int(model.ExitGenericError)
 	}
 	fmt.Printf("\nResults written to: %s\n", writtenPath)
-	fmt.Println("Share this file with the training team if asked .")
+	fmt.Println("Share this file with your training contact if asked.")
 	// Only the default result filename is gitignored.
 	// If the file landed inside a git working tree (e.g. a custom
 	// --out into the repo), warn — it could carry the real clusterId into a
@@ -385,7 +439,7 @@ func runHostStages(ctx context.Context, client *http.Client, rootPool *x509.Cert
 	alpnStage := inspect.ALPNStage
 	if cfg.GRPCClient && alpnStage.Verdict == model.VerdictWarn && alpnStage.RemediationCode == model.ErrALPNDowngradeWarn {
 		alpnStage.Verdict = model.VerdictFail
-		alpnStage.Detail += " (escalated to FAIL: --grpc-client was set for this cohort)"
+		alpnStage.Detail += " (escalated to FAIL: --grpc-client was set for this training group)"
 	}
 	add(inspect.TLSStage)
 	add(alpnStage)

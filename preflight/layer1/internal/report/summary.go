@@ -19,9 +19,16 @@ func Header(r model.Result) string {
 	if r.Target.ClusterID != "" {
 		fmt.Fprintf(&b, "  Cluster host : %s / %s\n", r.Target.APIHost, r.Target.ZeebeHost)
 	}
-	if r.Target.DetectedProxy != "" {
+	// "(none detected)" is only honest about the environment variables this tool
+	// reads. When the OS has its own proxy configured, say so on the same line:
+	// the checks below did NOT go through it, and a reader who sees a bare "none"
+	// would reasonably conclude this machine has no proxy at all.
+	switch {
+	case r.Target.DetectedProxy != "":
 		fmt.Fprintf(&b, "  Proxy        : %s\n", r.Target.DetectedProxy)
-	} else {
+	case r.Target.SystemProxy != "":
+		fmt.Fprintf(&b, "  Proxy        : none in this tool's environment, but Windows has one configured: %s\n", r.Target.SystemProxy)
+	default:
 		b.WriteString("  Proxy        : (none detected)\n")
 	}
 	if r.StacksRequested != "" {
@@ -90,9 +97,9 @@ var shortFailHeadline = map[model.ErrorClass]string{
 // --proxy, etc.) is the tool's own top-level flag, which the launcher
 // translates into whatever each language/runtime actually needs -- so the
 // SAME instruction is accurate regardless of which stage or which runtime's
-// probe hit this code (see the training documentation's per-runtime env-var-name callouts for
-// the one documented exception, Java full-mode + a custom CA, which is
-// separately flagged by its own CONFIG_ERROR note, not folded in here).
+// probe hit this code -- with one documented exception, Java full-mode + a
+// custom CA, which is separately flagged by its own CONFIG_ERROR note, not
+// folded in here.
 // Codes with no entry (rare/internal cases with nothing a participant can
 // fix locally) fall back to showing the raw Detail as-is -- see noteBullet.
 var checklistAction = map[model.ErrorClass]string{
@@ -112,7 +119,7 @@ var checklistAction = map[model.ErrorClass]string{
 	model.ErrTLSNonPublicIssuer: "A non-default certificate was presented for this connection — most likely the " +
 		"same corporate proxy described above. Import its root certificate with --trust-ca <path-to-file> rather " +
 		"than skipping verification.",
-	model.ErrALPNDowngradeWarn: "No action needed unless your cohort specifically uses the legacy gRPC client — " +
+	model.ErrALPNDowngradeWarn: "No action needed unless your training group specifically uses the legacy gRPC client — " +
 		"the REST API this tool checks works fine either way.",
 	model.ErrProxyAuth407: "Your proxy needs a username and password. Re-run with " +
 		"--proxy http://user:pass@<proxy-host>:<port> (Basic auth only). If your proxy uses NTLM/Windows-integrated " +
@@ -137,7 +144,7 @@ var checklistAction = map[model.ErrorClass]string{
 	model.ErrWebComponentUnreach: "Try opening this address directly in your browser. If that also fails, ask your " +
 		"network team to allow outbound HTTPS to this host — the same allowlist as the main connectivity check.",
 	model.ErrRuntimeAbsent: "This programming-language runtime isn't installed on this machine, so its check was " +
-		"skipped. Install it if your cohort needs it for the exercises, then re-run.",
+		"skipped. Install it if your training group needs it for the exercises, then re-run.",
 	model.ErrProbeCrashed: "This specific check crashed before finishing — usually not something you caused. " +
 		"Re-run once; if it keeps crashing, contact the training team with this run's result file.",
 	model.ErrConnectionClosed: "The connection opened but then closed before finishing — this is NOT necessarily a " +
@@ -228,7 +235,82 @@ func RuntimesSkippedLine(skipped []string) string {
 	if len(skipped) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("\nRuntimes not detected (install and re-run if your cohort needs them): %s\n", strings.Join(skipped, ", "))
+	return fmt.Sprintf("\nRuntimes not detected (install and re-run if your training group needs them): %s\n", strings.Join(skipped, ", "))
+}
+
+// shortVersion reduces a runtime's self-description to just its version number:
+// `openjdk version "21.0.8" 2025-07-15 LTS` -> `21.0.8`, `v22.14.0` -> `22.14.0`.
+// Returns "" when there's no version-looking token to find, which callers render
+// as "unknown" rather than echoing a whole banner line.
+func shortVersion(raw string) string {
+	var start, end int = -1, -1
+	for i := 0; i < len(raw); i++ {
+		isDigit := raw[i] >= '0' && raw[i] <= '9'
+		if start < 0 {
+			if isDigit {
+				start, end = i, i+1
+			}
+			continue
+		}
+		if isDigit || (raw[i] == '.' && i+1 < len(raw) && raw[i+1] >= '0' && raw[i+1] <= '9') {
+			end = i + 1
+			continue
+		}
+		break
+	}
+	if start < 0 {
+		return ""
+	}
+	return raw[start:end]
+}
+
+// RuntimesUsedLine names which runtime version each stack was checked with, in
+// one line, always shown.
+//
+// Layer 2's verdicts only mean something in reference to a specific runtime
+// installation — a trust store belongs to an installation, not to a language —
+// so on a machine with several JDKs or interpreters, the same PASS list can
+// describe a runtime the exercises never touch. Printing this by default keeps
+// the reader from having to assume; the resolved paths stay behind --verbose to
+// keep the default view short.
+func RuntimesUsedLine(runtimes []model.RuntimeDetail) string {
+	if len(runtimes) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(runtimes))
+	for _, r := range runtimes {
+		version := shortVersion(r.Version)
+		if version == "" {
+			version = "version unknown"
+		}
+		if r.Pinned {
+			version += ", pinned"
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s)", r.Stack, version))
+	}
+	return fmt.Sprintf("\nChecked with: %s\n", strings.Join(parts, ", "))
+}
+
+// RuntimeDetailLines adds the resolved binary path per stack, for --verbose.
+// The paths are what distinguish two installations of the same version, so they
+// are always persisted to the result file regardless: when a probe result is
+// surprising, the first question is which of the machine's several
+// JDKs/interpreters/Node majors produced it, and that has to be answerable from
+// the result file alone without asking the participant to re-run anything.
+func RuntimeDetailLines(runtimes []model.RuntimeDetail) string {
+	if len(runtimes) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nRuntime paths:\n")
+	for _, r := range runtimes {
+		pinned := ""
+		if r.Pinned {
+			pinned = " [explicitly selected]"
+		}
+		fmt.Fprintf(&b, "  %-11s %s%s\n", r.Stack, r.Binary, pinned)
+	}
+	return b.String()
 }
 
 // Footer renders the final overall verdict block. Requires Overall to

@@ -3,6 +3,7 @@
 package redact
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -14,6 +15,50 @@ func MaskID(id string) string {
 		return "****"
 	}
 	return id[:4] + "..." + id[len(id)-4:]
+}
+
+// homeDirPattern matches the username segment of a per-user home directory:
+// \Users\<name> (Windows), /Users/<name> (macOS), /home/<name> (Linux). WSL
+// paths (/mnt/c/Users/<name>) are covered too, since that's the same "Users"
+// literal appearing later in the string.
+var homeDirPattern = regexp.MustCompile(`(?i)([/\\](?:Users|home)[/\\])([^/\\]+)`)
+
+// MaskHomeDir replaces the username segment of any home-directory path found
+// in s, leaving the rest of the path intact.
+//
+// A resolved binary path routinely runs through a per-user profile directory —
+// a pyenv/nvm install, `pip install --user`, a personal venv, a Downloads
+// folder the tool itself was unzipped into — so printing it verbatim puts a
+// participant's real name into a file this tool explicitly tells them to send
+// to a third party (their training contact). The surrounding directory
+// structure is still useful for diagnosis; only the identifying segment needs
+// to go.
+func MaskHomeDir(s string) string {
+	return homeDirPattern.ReplaceAllString(s, "${1}<redacted-user>")
+}
+
+// MaskProxyValue replaces a non-empty proxy description with a placeholder
+// that confirms a proxy exists without naming it.
+//
+// A detected proxy's hostname or IP reveals internal network naming/topology
+// to whoever the result file ends up with (the training team, by design).
+// Deliberately a fixed placeholder rather than a partial redaction: the raw
+// value can be a full URL, a bare "host:port", or Windows' semicolon-separated
+// per-protocol ProxyServer form, and no single parsing strategy handles all
+// three without risking a partial value slipping through. The empty string
+// (no proxy detected/configured) passes through unchanged -- that fact isn't
+// sensitive, and masking it would make "no proxy" indistinguishable from "a
+// proxy, hidden."
+//
+// The placeholder carries no parentheses or leading "configured" of its own —
+// every call site already supplies that framing (a "Proxy: %s" line, a
+// "configured (%s)" clause) — so it reads correctly wherever it's substituted
+// in, masked or not.
+func MaskProxyValue(s string) string {
+	if s == "" {
+		return s
+	}
+	return "hostname/IP hidden — re-run with --unmasked-hostnames to reveal it"
 }
 
 // Secrets holds the sensitive values known for the current run. The

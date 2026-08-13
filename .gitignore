@@ -22,7 +22,8 @@ proxy-chain*
 
 # Tool result output — local run artifacts, may contain the real clusterId.
 # Only the DEFAULT filename is matched here; a custom --out name won't be, so
-# the tool warns at runtime when it writes a result inside a git repo  Prefer writing results to $TEMP / outside the repo.
+# the tool warns at runtime when it writes a result inside a git repo.
+# Prefer writing results to $TEMP / outside the repo.
 c8-preflight-result-*.json
 *preflight-result*.json
 

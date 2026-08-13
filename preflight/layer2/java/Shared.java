@@ -106,6 +106,37 @@ final class Shared {
     return fragment("", "probe-error", "PROBE_CRASHED", "probe crashed: " + detail);
   }
 
+  /**
+   * Renders a Throwable as its whole cause chain, not just its own message.
+   *
+   * <p>A crash fragment is often the only thing that survives a field run, and
+   * the top-level exception is regularly the least informative link in the
+   * chain: a gRPC/netty startup failure reports "failed to create a child event
+   * loop" while the fact worth having ("Unable to establish loopback
+   * connection", then the socket error under it) sits two or three causes down.
+   * Reporting only the outermost message turns a diagnosable environment
+   * problem into an opaque "probe crashed", and the participant can't be asked
+   * to re-run with a debugger attached.
+   *
+   * <p>Depth is capped because cause chains can be self-referential, and the
+   * result is one single-line string so it stays inside a JSON fragment.
+   */
+  static String describeThrowable(Throwable t) {
+    if (t == null) {
+      return "unknown error";
+    }
+    StringBuilder sb = new StringBuilder(String.valueOf(t));
+    Throwable cause = t.getCause();
+    for (int depth = 0; cause != null && depth < 5; depth++) {
+      sb.append(" <- caused by: ").append(cause);
+      if (cause == cause.getCause()) {
+        break;
+      }
+      cause = cause.getCause();
+    }
+    return sb.toString();
+  }
+
   // ---- proxy ----
 
   static String getProxyUrl() {
@@ -312,7 +343,7 @@ final class Shared {
               + "e.g. `keytool -importcert -alias corporate-proxy-ca -keystore truststore.jks -file "
               + path
               + " -storepass changeit -noprompt` (ideally starting from a copy of cacerts so public CAs "
-              + "stay trusted too -- see the training documentation). If you just want to trust this one PEM directly (accepting "
+              + "stay trusted too). If you just want to trust this one PEM directly (accepting "
               + "that it REPLACES the trust store rather than appending), use --trust-ca/CAMUNDA_MTLS_CA_PATH "
               + "instead, which reads a raw PEM. Leaving this set as-is would otherwise crash the JVM's "
               + "default SSL context with a cryptic NoSuchAlgorithmException the next time it's touched.");
@@ -365,9 +396,7 @@ final class Shared {
    *
    * Kept short and plain-language deliberately -- this string ends up in the
    * customer-facing result (Notes section / FAIL details), not just an
-   * engineering log. The full technical explanation (env var names, replace-
-   * vs-append semantics, -D flag mechanics) lives in the training documentation.md for trainers,
-   * not repeated here every time a participant runs the tool. */
+   * engineering log. */
   static String defaultTrustLabel() {
     String tsPath = envOrEmpty("CAMUNDA_JAVA_TRUSTSTORE");
     if (tsPath.isEmpty() || !isApplicableTruststoreFile(new java.io.File(tsPath))) {
@@ -476,8 +505,8 @@ final class Shared {
         "connection was established then closed unexpectedly before completing: "
             + chain.get(0)
             + " -- NOT necessarily a firewall block (the connection did open). Check for a CONFIG_ERROR "
-            + "note above (a custom CA set for full mode can break the OAuth token fetch specifically -- "
-            + "see the training documentation), or a stale/misconfigured proxy."
+            + "note above (a custom CA set for full mode can break the OAuth token fetch specifically), "
+            + "or a stale/misconfigured proxy."
       };
     }
     return new String[] {"CONNECT_REFUSED", "connection failed: " + chain.get(0)};

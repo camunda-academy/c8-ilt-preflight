@@ -75,11 +75,11 @@ function isVerbose() {
  * tunneledFetch in probe_sdk.js). OFF by default -- the real SDK's own
  * `fetch` has zero proxy handling and silently connects direct, which is
  * exactly what this tool's default behavior mirrors on purpose (matching
- * what a cohort's own unmodified job-worker code would do). Set
+ * what a training group's own unmodified job-worker code would do). Set
  * CAMUNDA_TS_PROXY_SUPPORT=1 (forwarded from the Go binary's
  * --ts-proxy-support) or pass --ts-proxy-support standalone to opt into the
- * tunneled check instead -- see the TypeScript notes for what that
- * does and does not prove.
+ * tunneled check instead -- at the cost of no longer testing the real SDK's
+ * own (nonexistent) proxy handling.
  */
 function tsProxySupportEnabled() {
   if (process.argv.slice(2).includes('--ts-proxy-support')) return true;

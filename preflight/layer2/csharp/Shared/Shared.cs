@@ -318,7 +318,7 @@ public static class Shared
     // Also verified: a missing/unreadable custom CA file throws
     // FileNotFoundException at TlsHelper.ReadPath -- a LOUD failure at
     // CamundaClient.Create() time, the OPPOSITE of Java's silent
-    // javax.net.ssl.trustStore-missing-file footgun (the training documentation). This probe
+    // javax.net.ssl.trustStore-missing-file footgun. This probe
     // mirrors that by WARNing (not silently falling back) when the file is
     // missing, so the same misconfiguration is visible in tier 1 too, before
     // tier 2 ever throws.

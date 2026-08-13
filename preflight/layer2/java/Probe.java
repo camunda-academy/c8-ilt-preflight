@@ -21,7 +21,7 @@ import javax.net.ssl.TrustManagerFactory;
  * Standalone: javac Probe.java Shared.java &amp;&amp; java Probe
  * (no Camunda SDK required -- javax.net.ssl only. The real camunda-client-java
  * SDK requires JDK 17+; this native probe only needs javax.net.ssl, which has
- * been stable since early JDKs, but the training cohort's JDK 17+ requirement
+ * been stable since early JDKs, but the training group's JDK 17+ requirement
  * applies regardless since they'll need it for the SDK anyway.)
  *
  * Env vars:
@@ -81,8 +81,7 @@ public final class Probe {
   private static final String USAGE =
       "Layer 2 native trust probe -- Java.\n"
           + "Standalone: javac Probe.java Shared.java && java Probe\n"
-          + "See the training documentation's Java section for env vars and the\n"
-          + "CAMUNDA_CA_CERTIFICATE_PATH vs CAMUNDA_MTLS_CA_PATH distinction.";
+          + "Supported env vars are listed in this probe's source header.";
 
   public static void main(String[] args) {
     for (String a : args) {
@@ -99,7 +98,7 @@ public final class Probe {
       // traceback on stdout that the launcher can't parse -- emit a proper
       // probe-error fragment instead, in the same schema every probe in this
       // project uses.
-      System.out.println(Shared.crashFragment(String.valueOf(t)));
+      System.out.println(Shared.crashFragment(Shared.describeThrowable(t)));
       System.exit(1);
     }
   }
@@ -161,8 +160,8 @@ public final class Probe {
 
     String configWarning = null;
     if (caPath.isEmpty() && !wrongNameCaPath.isEmpty()) {
-      // The exact trap this probe exists to catch: a customer who read the
-      // Go/Python/TypeScript sections of the training documentation sets CAMUNDA_MTLS_CA_PATH,
+      // The exact trap this probe exists to catch: a participant used to the
+      // Go/Python/TypeScript env var sets CAMUNDA_MTLS_CA_PATH,
       // which the real Java client does not read at all -- it stays on cacerts
       // and keeps failing behind an intercepting proxy, looking like the fix
       // "didn't work" when really the wrong env var name was used.
@@ -202,8 +201,7 @@ public final class Probe {
     ctx.init(null, tmf.getTrustManagers(), null);
 
     // Kept short and plain-language -- this ends up in the customer-facing
-    // result (Notes/FAIL details), not just an engineering log. The
-    // replace-vs-append nuance is documented in the training documentation.md for trainers.
+    // result (Notes/FAIL details), not just an engineering log.
     String label = "your custom certificate (" + caPath + ")";
     return new TrustContext(ctx, label, configWarning);
   }
@@ -268,7 +266,7 @@ public final class Probe {
                     + ": "
                     + e
                     + " -- likely a TLS-intercepting proxy; import its root CA via "
-                    + "CAMUNDA_CA_CERTIFICATE_PATH (see the training documentation)"
+                    + "CAMUNDA_CA_CERTIFICATE_PATH"
                 : classified[1];
         return Shared.fragment(target, "FAIL", errorClass, detail, trust.label);
       }

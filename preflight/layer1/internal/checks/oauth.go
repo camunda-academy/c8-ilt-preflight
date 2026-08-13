@@ -24,8 +24,8 @@ type tokenResponse struct {
 }
 
 // AcquireToken performs the OAuth2 client-credentials exchange ONCE per run
-// and reuses it — the training documentation's OAuth rate-limit mitigation, ~1 req/sec/IP,
-// depends on this.
+// and reuses it -- the OAuth host rate-limits to roughly 1 token/sec/IP, and
+// this call is on the hot path for every full-mode check.
 func AcquireToken(ctx context.Context, client *http.Client, oauthURL, clientID, clientSecret, audience string) (string, model.Stage) {
 	start := time.Now()
 	host := hostFromURL(oauthURL)
@@ -66,7 +66,7 @@ func AcquireToken(ctx context.Context, client *http.Client, oauthURL, clientID, 
 			Name: "oauth-token", Host: host, HTTPStatus: resp.StatusCode,
 			Verdict: model.VerdictFail, RemediationCode: model.ErrOAuthRateLimited,
 			Detail: "OAuth host rate-limited this request (~1 token/sec/IP shared across all clients on this network). " +
-				"Stagger participant runs or rely on network mode for the bulk check .",
+				"Stagger participant runs or rely on network mode for the bulk check.",
 			ElapsedMs: elapsed,
 		}
 	}

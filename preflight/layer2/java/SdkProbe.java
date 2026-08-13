@@ -73,9 +73,9 @@ import java.net.URI;
  *    real customer setting only HTTPS_PROXY would see the raw SDK ignore it
  *    entirely. This probe translates HTTPS_PROXY/HTTP_PROXY into the
  *    corresponding system properties before building the client, so it
- *    faithfully tests what happens once that translation is done -- and
- *    documents in the training documentation that a real Java app needs -Dhttps.proxyHost/Port
- *    (or the system-property equivalent), not just the env var.
+ *    faithfully tests what happens once that translation is done -- a real
+ *    Java app needs -Dhttps.proxyHost/Port (or the system-property
+ *    equivalent) set itself, not just the env var.
  *
  *  - send().join() unwraps the real cause directly (HttpCamundaFuture
  *    .unwrapExecutionException) -- catching ClientHttpException (which
@@ -85,8 +85,7 @@ import java.net.URI;
 public final class SdkProbe {
   private static final String USAGE =
       "Layer 2 SDK-snippet confirmation -- Java.\n"
-          + "Requires camunda-client-java on the classpath -- see run.sh/run.cmd.\n"
-          + "See the training documentation's Java section for env vars.";
+          + "Requires camunda-client-java on the classpath -- see run.sh/run.cmd.";
 
   public static void main(String[] args) {
     for (String a : args) {
@@ -99,7 +98,7 @@ public final class SdkProbe {
     try {
       System.exit(run(args));
     } catch (Throwable t) {
-      System.out.println(Shared.crashFragment(String.valueOf(t)));
+      System.out.println(Shared.crashFragment(Shared.describeThrowable(t)));
       System.exit(1);
     }
   }
@@ -226,7 +225,7 @@ public final class SdkProbe {
                     + "The OAuth call to login.cloud.camunda.io will likely fail behind an intercepting proxy "
                     + "(watch for a ConnectionClosedException below). Use --java-truststore instead for full "
                     + "mode behind such a proxy -- it sets the trust store JVM-wide, which the OAuth client's "
-                    + "default SSLContext also honors (see the training documentation)."));
+                    + "default SSLContext also honors."));
       }
       builder.credentialsProvider(oauthBuilder.build());
     }

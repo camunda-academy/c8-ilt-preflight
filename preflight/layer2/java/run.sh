@@ -13,20 +13,81 @@ set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$DIR/out"
 
-if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
-  echo "java/javac not found on PATH -- a JDK is required (17+ recommended, matching the real Camunda Java SDK)" >&2
-  exit 1
+# Which JDK installation this probe uses for EVERY javac/java call below. A
+# trust store belongs to an INSTALLATION -- Java reads the cacerts of whichever
+# JDK ran -- so on a machine with several JDKs, checking the wrong one produces a
+# green result that says nothing about the JDK the exercises actually run on.
+# CAMUNDA_JAVA_HOME is how the launcher forwards an explicit pin (--java-home).
+#
+# A pin is NEVER quietly replaced by a PATH lookup: falling back would check a
+# different installation, and a different trust store, than the one asked for --
+# exactly the confusion pinning exists to remove. So an unusable pin fails loudly
+# and names the path it tried.
+#
+# Unset behaves exactly as before: plain PATH lookup. Deliberately NOT consulting
+# an ambient JAVA_HOME -- the launcher already detects a JAVA_HOME-vs-PATH
+# mismatch and warns about it, so honoring it here would duplicate that logic and
+# silently change long-standing behavior.
+if [ -n "${CAMUNDA_JAVA_HOME:-}" ]; then
+  JAVAC="$CAMUNDA_JAVA_HOME/bin/javac"
+  JAVA="$CAMUNDA_JAVA_HOME/bin/java"
+  # -x also resolves a Windows javac.exe/java.exe when this script runs under
+  # Git Bash/MSYS, so no separate .exe branch is needed.
+  if [ ! -x "$JAVAC" ]; then
+    echo "CAMUNDA_JAVA_HOME is set, but no runnable javac was found at $JAVAC -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested" >&2
+    exit 1
+  fi
+  if [ ! -x "$JAVA" ]; then
+    echo "CAMUNDA_JAVA_HOME is set, but no runnable java was found at $JAVA -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested" >&2
+    exit 1
+  fi
+else
+  JAVAC=javac
+  JAVA=java
+  if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
+    echo "java/javac not found on PATH -- a JDK is required (17+ recommended, matching the real Camunda Java SDK)" >&2
+    exit 1
+  fi
+fi
+
+# Minimum JDK the probe sources compile on: Probe.java calls
+# ByteArrayOutputStream.toString(Charset), added in Java 10. Below the floor,
+# javac would spray a raw "method not applicable" dump at the operator instead of
+# an answer, so say so on the JSON channel and stop. SKIP, not FAIL: a too-old
+# JDK is a machine-setup fact, and the fix may be as small as pointing the check
+# at a newer JDK that is already installed.
+#
+# `javac -version` (NOT --version -- only JDK 9+ accepts the double-dash form)
+# prints either "javac 21.0.8" or, on JDK 8, "javac 1.8.0_401", where a leading
+# 1.x means major x. A banner that does not match either shape is left alone
+# rather than guessed at: gating on a version that could not be read would block
+# a JDK that is very likely fine.
+MIN_JDK=10
+jdk_ver="$("$JAVAC" -version 2>&1 | head -n 1)" || jdk_ver=""
+jdk_ver="$(printf '%s' "$jdk_ver" | sed -n 's/^javac \([0-9][0-9._]*\).*/\1/p')"
+case "$jdk_ver" in
+  1.*) jdk_major="$(printf '%s' "$jdk_ver" | cut -d. -f2)" ;;
+  *)   jdk_major="$(printf '%s' "$jdk_ver" | cut -d. -f1)" ;;
+esac
+case "$jdk_major" in ''|*[!0-9]*) jdk_major="" ;; esac
+if [ -n "$jdk_major" ] && [ "$jdk_major" -lt "$MIN_JDK" ]; then
+  # No filesystem path in this JSON: a Windows-style path carries literal
+  # backslashes, which are invalid JSON escapes and make the launcher drop the
+  # whole fragment. The version substituted in is digits/dots/underscores only,
+  # by construction of the sed match above.
+  echo "{\"runtime\":\"java\",\"trustStoreExercised\":\"\",\"target\":\"jdk-version\",\"verdict\":\"SKIP\",\"errorClass\":\"OK\",\"detail\":\"the JDK this check would use is too old: javac reports version $jdk_ver, but Java $MIN_JDK or newer is required to compile the probes, so nothing was checked. Install a newer JDK -- 17 or later matches the real Camunda Java SDK -- or point the check at a newer one already on this machine with --java-home\"}"
+  exit 0
 fi
 
 mkdir -p "$OUT"
 rc=0
 
 # --- Tier 1: native trust probe (mandatory, no dependency) ---
-if javac -encoding UTF-8 -d "$OUT" "$DIR/Probe.java" "$DIR/Shared.java" 2>&1; then
+if "$JAVAC" -encoding UTF-8 -d "$OUT" "$DIR/Probe.java" "$DIR/Shared.java" 2>&1; then
   # -Dstdout.encoding=UTF-8 / -Dstderr.encoding=UTF-8: without these, Windows'
   # default platform charset mangles non-ASCII bytes (an em-dash in a
   # remediation message became a replacement character).
-  java -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" Probe "$@" || rc=1
+  "$JAVA" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" Probe "$@" || rc=1
 else
   echo "javac compile of Probe.java failed" >&2
   rc=1
@@ -101,8 +162,8 @@ if libHasJars; then
     OUT_CP="$OUT"
     LIB_CP="$SDK_LIB/*"
   fi
-  if javac -encoding UTF-8 -cp "$LIB_CP" -d "$OUT" "$DIR/SdkProbe.java" "$DIR/Shared.java" 2>&1; then
-    java -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT_CP$SEP$LIB_CP" SdkProbe "$@" || rc=1
+  if "$JAVAC" -encoding UTF-8 -cp "$LIB_CP" -d "$OUT" "$DIR/SdkProbe.java" "$DIR/Shared.java" 2>&1; then
+    "$JAVA" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT_CP$SEP$LIB_CP" SdkProbe "$@" || rc=1
   else
     echo "javac compile of SdkProbe.java failed against resolved classpath" >&2
     rc=1
@@ -128,8 +189,8 @@ fi
 # emits a SKIP fragment unless opted in (--maven-depcheck / CAMUNDA_MAVEN_DEPCHECK
 # / any --maven-* setting), and only then shells out to Maven. Catches the
 # corporate-mirror case the trust/SDK probes are blind to. ---
-if javac -encoding UTF-8 -d "$OUT" "$DIR/DepCheck.java" "$DIR/Shared.java" 2>&1; then
-  java -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" DepCheck "$@" || rc=1
+if "$JAVAC" -encoding UTF-8 -d "$OUT" "$DIR/DepCheck.java" "$DIR/Shared.java" 2>&1; then
+  "$JAVA" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" DepCheck "$@" || rc=1
 else
   echo "javac compile of DepCheck.java failed" >&2
 fi

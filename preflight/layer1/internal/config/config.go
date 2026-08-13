@@ -38,6 +38,15 @@ type Config struct {
 
 	SkipTransport bool // --skip-transport: skip the Go/Layer 1 checks (transport, TLS, DNS, OAuth reachability, topology, web components) and run only the Layer 2 runtime probes
 
+	// UnmaskedHostnames: --unmasked-hostnames. A detected proxy's hostname/IP
+	// (and the auto-config script URL, if any) is masked by default -- its
+	// PRESENCE still shows, but not what it is -- since it reveals internal
+	// network naming to whoever the result file is shared with (the training
+	// team). This flag opts back into the real value for whoever is actually
+	// diagnosing the proxy. Off by default so the privacy-conscious behavior
+	// is what a participant gets without having to know to ask for it.
+	UnmaskedHostnames bool
+
 	CustomCAPath string // --trust-ca (--ca is a deprecated alias) / CAMUNDA_MTLS_CA_PATH
 	ProxyURL     string // --proxy (explicit override; else HTTP_PROXY/HTTPS_PROXY/NO_PROXY are auto-detected)
 
@@ -45,7 +54,7 @@ type Config struct {
 	// Java-specific alternative to --trust-ca: a path to a JKS/PKCS12 truststore file,
 	// applied by the Java probes as -Djavax.net.ssl.trustStore before any SSL
 	// work. Unlike CAMUNDA_CA_CERTIFICATE_PATH (which REPLACES the trust store
-	// entirely — see java-ca-cert-scope memory), an operator can build this
+	// entirely), an operator can build this
 	// file as a copy of cacerts with a corporate CA merged in via keytool, so
 	// public CAs stay trusted. Ignored (with a WARN) if CAMUNDA_CA_CERTIFICATE_PATH
 	// is also set. Password is a secret — never seeded into a flag default (see
@@ -67,13 +76,23 @@ type Config struct {
 	// cluster-api SDK's own fetch has ZERO proxy handling (confirmed from
 	// source) and silently bypasses --proxy, connecting directly instead —
 	// the tool's DEFAULT behavior mirrors that real, unmodified SDK exactly
-	// (matching what a cohort's own job-worker code would do out of the box).
+	// (matching what a training group's own job-worker code would do out of the box).
 	// Enabling this flag swaps in a hand-written proxy-tunneling `fetch`
 	// override so the check actually routes through --proxy, at the cost of
-	// no longer testing the real SDK's own (nonexistent) proxy behavior — see the TypeScript notes for the full tradeoff.
+	// no longer testing the real SDK's own (nonexistent) proxy behavior.
 	TSProxySupport bool
 
-	CohortID string // --cohort (opaque label only)
+	// Runtime pins for the Layer 2 stacks. A machine can carry several JDKs, a
+	// system interpreter next to a project venv, or more than one Node major;
+	// each installation has its own trust store, so "whichever came first on
+	// PATH" is not necessarily the one the training exercises will run on. These
+	// let an operator name the right one explicitly.
+	JavaHome  string // --java-home  -> CAMUNDA_JAVA_HOME  (a JDK directory)
+	PythonBin string // --python-bin -> CAMUNDA_PYTHON_BIN (an interpreter binary)
+	NodeBin   string // --node-bin   -> CAMUNDA_NODE_BIN
+	DotnetBin string // --dotnet-bin -> CAMUNDA_DOTNET_BIN
+
+	TrainingGroupID string // --training-group (opaque label only)
 
 	OutPath     string // --out
 	LogFilePath string // --log-file
@@ -109,11 +128,12 @@ func Parse(argv []string) (*Config, error) {
 	audience := fs.String("audience", "zeebe.camunda.io", "OAuth token audience (env: CAMUNDA_TOKEN_AUDIENCE)")
 
 	modeFlag := fs.String("mode", "", "network|full (default: network -- full is opt-in, never auto-detected from credential presence)")
-	stacksFlag := fs.String("stacks", "", "comma-separated cohort stacks to run Layer 2 for, e.g. java,python (default selection mechanism)")
+	stacksFlag := fs.String("stacks", "", "comma-separated training-group stacks to run Layer 2 for, e.g. java,python (default selection mechanism)")
 	autoFlag := fs.Bool("auto", false, "auto-detect installed runtimes on PATH instead of explicit --stacks (opt-in fallback for the unknown-language case)")
-	grpcFlag := fs.Bool("grpc-client", false, "escalate an ALPN downgrade (HTTP/2->1.1) from WARN to FAIL because the cohort uses the legacy gRPC Zeebe client")
+	grpcFlag := fs.Bool("grpc-client", false, "escalate an ALPN downgrade (HTTP/2->1.1) from WARN to FAIL because the training group uses the legacy gRPC Zeebe client")
 	verboseFlag := fs.Bool("verbose", false, "surface extra technical detail hidden by default -- the Console-URL normalization notice, plus the raw exception text under each Troubleshooting/General note (the default view shows a plain-language 'what to do' instruction instead). Useful for the operator/trainer; hidden from participants otherwise")
 	skipTransportFlag := fs.Bool("skip-transport", false, "skip the Go/Layer 1 transport checks (TLS, DNS, OAuth reachability, topology, web components) and run only the Layer 2 runtime probes")
+	unmaskedHostnamesFlag := fs.Bool("unmasked-hostnames", false, "show a detected proxy's real hostname/IP instead of a masked placeholder -- off by default since the result file is often shared with the training team, and the internal proxy address isn't needed for that unless someone is specifically diagnosing it")
 
 	trustCA := fs.String("trust-ca", "", "path to a custom CA PEM to trust in addition to the system store — reaches every runtime (Go/Python/TypeScript directly, Java too unless --java-truststore is also set) (env: CAMUNDA_MTLS_CA_PATH)")
 	legacyCA := fs.String("ca", "", "deprecated alias for --trust-ca — will be removed in a future version")
@@ -125,9 +145,14 @@ func Parse(argv []string) (*Config, error) {
 	mavenMirror := fs.String("maven-mirror", "", "Java only: explicit Maven mirror URL to test (generates a mirrorOf=* settings); implies --maven-depcheck")
 	mavenSettings := fs.String("maven-settings", "", "Java only: path to a settings.xml to use for the Maven dependency-resolution check; implies --maven-depcheck")
 	mavenCentralOnly := fs.Bool("maven-central-only", false, "Java only: restrict the Maven dependency-resolution check to the Maven Central baseline (skip the customer-mirror leg); implies --maven-depcheck")
-	tsProxySupport := fs.Bool("ts-proxy-support", false, "TypeScript only: route the SDK-snippet (tier 2) check through --proxy via a hand-written fetch override, instead of the default behavior of mirroring the real SDK exactly (which has zero proxy support and silently connects direct). Opt-in because it changes what's actually being tested — see the TypeScript notes (env: CAMUNDA_TS_PROXY_SUPPORT)")
+	tsProxySupport := fs.Bool("ts-proxy-support", false, "TypeScript only: route the SDK-snippet (tier 2) check through --proxy via a hand-written fetch override, instead of the default behavior of mirroring the real SDK exactly (which has zero proxy support and silently connects direct). Opt-in because it changes what's actually being tested (env: CAMUNDA_TS_PROXY_SUPPORT)")
 
-	cohort := fs.String("cohort", "", "opaque cohort/engagement label for the result JSON")
+	javaHome := fs.String("java-home", "", "Java only: the JDK to check with (a directory; its bin/java is used), instead of whichever javac/java comes first on PATH. Use when the machine has several JDKs and the exercises run on a specific one — each JDK has its own cacerts trust store (env: CAMUNDA_JAVA_HOME)")
+	pythonBin := fs.String("python-bin", "", "Python only: the interpreter to check with (a path to a python binary), instead of whichever python3/python comes first on PATH. Use when the exercises run in a venv — each interpreter has its own certifi CA bundle (env: CAMUNDA_PYTHON_BIN)")
+	nodeBin := fs.String("node-bin", "", "TypeScript only: the node binary to check with, instead of whichever node comes first on PATH. Use when several Node majors are installed — the TLS stack and bundled CA set differ between them (env: CAMUNDA_NODE_BIN)")
+	dotnetBin := fs.String("dotnet-bin", "", "C# only: the dotnet binary to check with, instead of whichever dotnet comes first on PATH (env: CAMUNDA_DOTNET_BIN)")
+
+	trainingGroup := fs.String("training-group", "", "opaque training-group/engagement label for the result JSON")
 	outPath := fs.String("out", "", "path to write the result JSON (default: current directory, falls back to temp dir if unwritable)")
 	logFile := fs.String("log-file", "", "optional path for a verbose diagnostic log (redacted, local only)")
 
@@ -178,14 +203,18 @@ func Parse(argv []string) (*Config, error) {
 		ClientSecret: strings.TrimSpace(resolve("client-secret", *clientSecret, "CAMUNDA_CLIENT_SECRET")),
 		OAuthURL:     strings.TrimSpace(resolve("oauth-url", *oauthURL, "CAMUNDA_OAUTH_URL")),
 		Audience:     strings.TrimSpace(resolve("audience", *audience, "CAMUNDA_TOKEN_AUDIENCE")),
-		GRPCClient:   *grpcFlag, Verbose: *verboseFlag, SkipTransport: *skipTransportFlag, CustomCAPath: strings.TrimSpace(resolveCA()), ProxyURL: strings.TrimSpace(*proxyURL),
+		GRPCClient:   *grpcFlag, Verbose: *verboseFlag, SkipTransport: *skipTransportFlag, UnmaskedHostnames: *unmaskedHostnamesFlag, CustomCAPath: strings.TrimSpace(resolveCA()), ProxyURL: strings.TrimSpace(*proxyURL),
 		JavaTrustStorePath:     strings.TrimSpace(resolve("java-truststore", *javaTrustStore, "CAMUNDA_JAVA_TRUSTSTORE")),
 		JavaTrustStorePassword: strings.TrimSpace(resolve("java-truststore-password", *javaTrustStorePassword, "CAMUNDA_JAVA_TRUSTSTORE_PASSWORD")),
 		MavenMirror:            strings.TrimSpace(resolve("maven-mirror", *mavenMirror, "CAMUNDA_MAVEN_MIRROR")),
 		MavenSettings:          strings.TrimSpace(resolve("maven-settings", *mavenSettings, "CAMUNDA_MAVEN_SETTINGS")),
 		MavenCentralOnly:       *mavenCentralOnly,
 		TSProxySupport:         *tsProxySupport,
-		CohortID:               strings.TrimSpace(*cohort), OutPath: strings.TrimSpace(*outPath), LogFilePath: strings.TrimSpace(*logFile),
+		JavaHome:               strings.TrimSpace(resolve("java-home", *javaHome, "CAMUNDA_JAVA_HOME")),
+		PythonBin:              strings.TrimSpace(resolve("python-bin", *pythonBin, "CAMUNDA_PYTHON_BIN")),
+		NodeBin:                strings.TrimSpace(resolve("node-bin", *nodeBin, "CAMUNDA_NODE_BIN")),
+		DotnetBin:              strings.TrimSpace(resolve("dotnet-bin", *dotnetBin, "CAMUNDA_DOTNET_BIN")),
+		TrainingGroupID:        strings.TrimSpace(*trainingGroup), OutPath: strings.TrimSpace(*outPath), LogFilePath: strings.TrimSpace(*logFile),
 		DiagnosticInsecureSkipVerify: *diagnosticInsecure,
 		AutoDetect:                   *autoFlag,
 	}

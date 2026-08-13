@@ -17,8 +17,9 @@ type WebComponentHost struct {
 	Host string
 }
 
-// WebComponentHosts returns the browser-facing hosts for a region, in the
-// same order as the firewall allowlist's web-component entries.
+// WebComponentHosts returns the browser-facing hosts for a region: the
+// consoles and dashboards a training group's browser exercises reach, as distinct
+// from the API/gRPC hosts the language runtimes talk to.
 func WebComponentHosts(region string) []WebComponentHost {
 	return []WebComponentHost{
 		{"console", "console.cloud.camunda.io"},
@@ -29,8 +30,8 @@ func WebComponentHosts(region string) []WebComponentHost {
 	}
 }
 
-// CheckWebComponent is reachability-only: by design, these
-// hosts are browser destinations that redirect to login, so ANY clean HTTP
+// CheckWebComponent is reachability-only: these hosts are browser
+// destinations that redirect to login, so ANY clean HTTP
 // response (not just 200) proves reachability — the same "clean response
 // proves transport is open" principle used by the other reachability checks
 // in this package.
