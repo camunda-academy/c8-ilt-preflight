@@ -104,18 +104,17 @@ func TestTruncate_DoesNotSplitMultiByteRune(t *testing.T) {
 	}
 }
 
-// TestMaskHomeDir covers the real, non-hypothetical case: a resolved binary
-// path routinely runs through a per-user profile directory -- a pyenv/nvm
-// install, a Windows Store App Execution Alias, a personal venv -- and that
-// path is always in the result JSON, not just --verbose. The exact shape below
-// (WindowsApps under a real username) is what a live run produced.
+// TestMaskHomeDir covers the common case: a resolved binary path routinely
+// runs through a per-user profile directory -- a pyenv/nvm install, a Windows
+// Store App Execution Alias, a personal venv -- and that path is always in the
+// result JSON, not just --verbose.
 func TestMaskHomeDir(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
 		{
 			"windows store alias",
-			`C:\Users\HendrikKupitz\AppData\Local\Microsoft\WindowsApps\python3.exe`,
+			`C:\Users\jsmith\AppData\Local\Microsoft\WindowsApps\python3.exe`,
 			`C:\Users\<redacted-user>\AppData\Local\Microsoft\WindowsApps\python3.exe`,
 		},
 		{"windows jdk home", `C:\Users\jsmith\.jdks\jdk-21\bin\java.exe`, `C:\Users\<redacted-user>\.jdks\jdk-21\bin\java.exe`},

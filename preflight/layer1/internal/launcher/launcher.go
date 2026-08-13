@@ -312,7 +312,13 @@ func pinMismatchWarning(st RuntimeStatus) (model.ProbeFragment, bool) {
 		return model.ProbeFragment{}, false
 	}
 	return model.ProbeFragment{
-		Runtime:    st.Stack,
+		Runtime: st.Stack,
+		// The " (config)" suffix is the cross-language convention marking a
+		// finding about configuration rather than a check against a real host.
+		// It keeps this out of the inline PASS/FAIL list -- where it would print
+		// as a bare "configuration error" against no target, saying nothing --
+		// and routes it to the notes section, which shows the full text below.
+		Target:     "runtime selection (config)",
 		Verdict:    model.VerdictWarn,
 		ErrorClass: model.ErrConfigError,
 		Detail: fmt.Sprintf("%s points at %s, but the %s runtime actually used is %s — these are different installations with "+
@@ -344,7 +350,10 @@ func inheritedGlobalJSONWarning(stack string) (model.ProbeFragment, bool) {
 		candidate := filepath.Join(dir, "global.json")
 		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
 			return model.ProbeFragment{
-				Runtime:    stack,
+				Runtime: stack,
+				// See the note on the runtime-selection warning above: same
+				// convention, same reason.
+				Target:     "SDK pin (config)",
 				Verdict:    model.VerdictWarn,
 				ErrorClass: model.ErrConfigError,
 				Detail: fmt.Sprintf("%s applies to this run: the .NET tooling reads global.json from the working directory upward, "+

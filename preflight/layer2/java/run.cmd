@@ -38,9 +38,16 @@ rem hands back exit code 0 -- verified on this cmd.exe -- so the launcher would
 rem read a broken pin as success. Do not "simplify" these back inline.
 set "JAVAC=javac"
 set "JAVA=java"
-if not "%CAMUNDA_JAVA_HOME%"=="" (
-  set "JAVAC=%CAMUNDA_JAVA_HOME%\bin\javac.exe"
-  set "JAVA=%CAMUNDA_JAVA_HOME%\bin\java.exe"
+rem `if defined`, not `if not "%VAR%"==""`: the quoted-comparison form expands
+rem the value before tokenization, so a crafted value can close the quote and
+rem inject commands ahead of the existence check below. `if defined` never
+rem substitutes the value at all.
+if defined CAMUNDA_JAVA_HOME (
+  rem !VAR! (delayed), never %VAR%: %VAR% inside a parenthesized block is
+  rem substituted when the block is PARSED, before any of it runs, so a value
+  rem containing " or & is parsed as command syntax instead of as data.
+  set "JAVAC=!CAMUNDA_JAVA_HOME!\bin\javac.exe"
+  set "JAVA=!CAMUNDA_JAVA_HOME!\bin\java.exe"
   rem Existence is the only check available here -- Windows has no executable bit.
   if not exist "!JAVAC!" goto :pinNoJavac
   if not exist "!JAVA!" goto :pinNoJava
@@ -133,11 +140,19 @@ set "SDK_DIR=%DIR%sdk"
 set "SDK_LIB=%SDK_DIR%\lib"
 
 set AUTO_INSTALL=0
-if "%CAMUNDA_SDK_AUTO_INSTALL%"=="1" set AUTO_INSTALL=1
-if "%CAMUNDA_SDK_AUTO_INSTALL%"=="true" set AUTO_INSTALL=1
-for %%A in (%*) do (
-  if "%%A"=="--install" set AUTO_INSTALL=1
-)
+if "!CAMUNDA_SDK_AUTO_INSTALL!"=="1" set AUTO_INSTALL=1
+if "!CAMUNDA_SDK_AUTO_INSTALL!"=="true" set AUTO_INSTALL=1
+rem A shift-scan over %1, not `for %%A in (%*)`: an unquoted %* in a for-set is
+rem expanded before tokenization, so an argument containing & or | would run as
+rem a command, and it glob-expands against the working directory. %~1 strips
+rem surrounding quotes and never re-parses. `shift` does not affect %*, which is
+rem still forwarded intact to the probes below.
+:scanArgs
+if "%~1"=="" goto :scanArgsDone
+if "%~1"=="--install" set AUTO_INSTALL=1
+shift
+goto :scanArgs
+:scanArgsDone
 
 rem MVN_FAILED distinguishes "Maven ran but resolution FAILED" (a real finding --
 rem almost always a broken/misconfigured corporate mirror or a proxy blocking
