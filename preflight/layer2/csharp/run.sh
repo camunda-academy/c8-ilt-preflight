@@ -81,12 +81,19 @@ fi
 # exactly the scenario it exists to catch). Restored packages are cached under
 # SdkProbe/obj + the shared NuGet cache (~/.nuget/packages), reused on repeat
 # runs, mirroring Java's "resolve once, cache after" Maven precedent. ---
-auto_install=0
-if [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "1" ] || [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "true" ]; then
-  auto_install=1
-fi
+# Fetching the pinned SDK is the DEFAULT, and opting out is explicit. A tier
+# that silently SKIPs answers nothing about whether the real client reaches the
+# cluster, which is the question this tier exists to settle -- and a SKIP sitting
+# among PASS lines reads as "fine" to a participant scanning the output.
+# Opt out with --no-install or CAMUNDA_SDK_AUTO_INSTALL=0 when writing into the
+# machine's package cache is unwanted. --install is still accepted so existing
+# muscle memory and scripts keep working; it is now a no-op.
+auto_install=1
+case "$(printf '%s' "${CAMUNDA_SDK_AUTO_INSTALL:-}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) auto_install=0 ;;
+esac
 for a in "$@"; do
-  [ "$a" = "--install" ] && auto_install=1
+  [ "$a" = "--no-install" ] && auto_install=0
 done
 
 SDK_ASSETS="$DIR/SdkProbe/obj/project.assets.json"
@@ -125,7 +132,7 @@ elif [ -f "$SDK_ASSETS" ]; then
     echo '{"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"the SDK check could not be built even though its packages resolved -- see the dotnet build output on stderr. On a restricted network this is usually a targeting pack the SDK still needs from nuget.org. The mandatory native trust check above is unaffected and its result stands."}'
   fi
 else
-  echo '{"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"Camunda.Orchestration.Sdk not resolved -- run: dotnet restore layer2/csharp/SdkProbe/SdkProbe.csproj --locked-mode, or set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to fetch it automatically next run"}'
+  echo '{"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"Camunda.Orchestration.Sdk not resolved, so the real .NET SDK was not exercised. Restore it manually with: dotnet restore layer2/csharp/SdkProbe/SdkProbe.csproj --locked-mode. If you passed --no-sdk-install, or set CAMUNDA_SDK_AUTO_INSTALL=0, re-run without it to fetch it automatically."}'
 fi
 
 exit "$rc"

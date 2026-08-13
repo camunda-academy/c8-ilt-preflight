@@ -111,12 +111,19 @@ SDK_DIR="$DIR/sdk"
 SDK_LIB="$SDK_DIR/lib"
 SDK_SPEC="io.camunda:camunda-client-java:8.9.15"
 
-auto_install=0
-if [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "1" ] || [ "${CAMUNDA_SDK_AUTO_INSTALL:-}" = "true" ]; then
-  auto_install=1
-fi
+# Fetching the pinned SDK is the DEFAULT, and opting out is explicit. A tier
+# that silently SKIPs answers nothing about whether the real client reaches the
+# cluster, which is the question this tier exists to settle -- and a SKIP sitting
+# among PASS lines reads as "fine" to a participant scanning the output.
+# Opt out with --no-install or CAMUNDA_SDK_AUTO_INSTALL=0 when writing into the
+# machine's package cache is unwanted. --install is still accepted so existing
+# muscle memory and scripts keep working; it is now a no-op.
+auto_install=1
+case "$(printf '%s' "${CAMUNDA_SDK_AUTO_INSTALL:-}" | tr '[:upper:]' '[:lower:]')" in
+  0|false|no|off) auto_install=0 ;;
+esac
 for a in "$@"; do
-  [ "$a" = "--install" ] && auto_install=1
+  [ "$a" = "--no-install" ] && auto_install=0
 done
 
 libHasJars() { ls "$SDK_LIB"/*.jar >/dev/null 2>&1; }
@@ -180,7 +187,7 @@ else
   # Static, safe JSON (no untrusted content) -- SKIP, not FAIL: Maven was not
   # run (absent, or auto-install not opted in), so there is nothing to report
   # yet. The mandatory native probe above already covers the trust check.
-  echo '{"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved -- install Maven and set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to fetch it automatically, or drop the SDK jars into sdk/lib/ yourself"}'
+  echo '{"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved, so the real Java SDK was not exercised. The automatic fetch needs Maven on PATH -- install Maven and re-run, or drop the SDK jars into sdk/lib/ yourself. If you passed --no-sdk-install, or set CAMUNDA_SDK_AUTO_INSTALL=0, re-run without it to fetch the SDK automatically."}'
 fi
 
 # --- Tier 3: Maven dependency-resolution probe. Stdlib only (no

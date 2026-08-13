@@ -140,9 +140,18 @@ rem handling. ---
 set "SDK_DIR=%DIR%sdk"
 set "SDK_LIB=%SDK_DIR%\lib"
 
-set AUTO_INSTALL=0
-if "!CAMUNDA_SDK_AUTO_INSTALL!"=="1" set AUTO_INSTALL=1
-if "!CAMUNDA_SDK_AUTO_INSTALL!"=="true" set AUTO_INSTALL=1
+rem Fetching the pinned SDK is the DEFAULT, and opting out is explicit. A tier
+rem that silently SKIPs answers nothing about whether the real client reaches
+rem the cluster, which is the question this tier exists to settle -- and a SKIP
+rem sitting among PASS lines reads as "fine" to a participant scanning output.
+rem Opt out with --no-install or CAMUNDA_SDK_AUTO_INSTALL=0.
+rem /i for a case-insensitive compare, and !VAR! (delayed) so the value is never
+rem re-parsed as command syntax the way %VAR% inside a block would be.
+set AUTO_INSTALL=1
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="0" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="false" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="no" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="off" set AUTO_INSTALL=0
 rem A shift-scan over %1, not `for %%A in (%*)`: an unquoted %* in a for-set is
 rem expanded before tokenization, so an argument containing & or | would run as
 rem a command, and it glob-expands against the working directory. %~1 strips
@@ -150,7 +159,9 @@ rem surrounding quotes and never re-parses. `shift` does not affect %*, which is
 rem still forwarded intact to the probes below.
 :scanArgs
 if "%~1"=="" goto :scanArgsDone
-if "%~1"=="--install" set AUTO_INSTALL=1
+rem --install is still accepted so existing muscle memory keeps working; it is
+rem now a no-op, since fetching is the default.
+if "%~1"=="--no-install" set AUTO_INSTALL=0
 shift
 goto :scanArgs
 :scanArgsDone
@@ -210,7 +221,7 @@ if exist "%SDK_LIB%\*.jar" (
   rem the JSON is invalid ('\l' is not a valid JSON escape), so encoding/json in
   rem the launcher silently drops the whole fragment and this guidance never
   rem reaches the user on Windows.
-  echo {"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved -- install Maven and set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to fetch it automatically, or drop the SDK jars into sdk/lib/ yourself"}
+  echo {"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved, so the real Java SDK was not exercised. The automatic fetch needs Maven on PATH -- install Maven and re-run, or drop the SDK jars into sdk/lib/ yourself. If you passed --no-sdk-install, or set CAMUNDA_SDK_AUTO_INSTALL=0, re-run without it to fetch the SDK automatically."}
 )
 
 rem --- Tier 3: Maven dependency-resolution probe. Stdlib only,

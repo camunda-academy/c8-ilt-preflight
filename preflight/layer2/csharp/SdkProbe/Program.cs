@@ -1,8 +1,8 @@
 // Layer 2 SDK-snippet confirmation -- C#/.NET, tier 2.
 //
 // Standalone (requires the real SDK restored - see run.sh/run.cmd, which run
-// `dotnet restore --locked-mode` against the committed packages.lock.json
-// when CAMUNDA_SDK_AUTO_INSTALL=1 / --install is set):
+// `dotnet restore --locked-mode` against the committed packages.lock.json by
+// default, unless --no-install / CAMUNDA_SDK_AUTO_INSTALL=0 opts out):
 //
 //   dotnet build SdkProbe.csproj -c Release -o out && dotnet out/SdkProbe.dll
 //

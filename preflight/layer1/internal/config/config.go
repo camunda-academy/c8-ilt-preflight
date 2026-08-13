@@ -70,6 +70,14 @@ type Config struct {
 	MavenSettings    string // --maven-settings -> CAMUNDA_MAVEN_SETTINGS (settings.xml path)
 	MavenCentralOnly bool   // --maven-central-only -> CAMUNDA_MAVEN_CENTRAL_ONLY
 
+	// NoSDKInstall: --no-sdk-install -> CAMUNDA_SDK_AUTO_INSTALL=0. The tier-2
+	// SDK checks fetch their pinned, lockfile-verified SDK when it isn't already
+	// present, because a tier that silently SKIPs answers nothing about whether
+	// the real client can reach the cluster — the question the participant is
+	// actually here to settle. This opts out for a machine where writing into
+	// the language's package cache is unwanted, at the cost of that coverage.
+	NoSDKInstall bool
+
 	// TSProxySupport: --ts-proxy-support -> CAMUNDA_TS_PROXY_SUPPORT. Opt-in
 	// because it changes what the TypeScript tier-2 (SDK-snippet) check
 	// actually exercises. Off by default: the real @camunda8/orchestration-
@@ -145,6 +153,7 @@ func Parse(argv []string) (*Config, error) {
 	mavenMirror := fs.String("maven-mirror", "", "Java only: explicit Maven mirror URL to test (generates a mirrorOf=* settings); implies --maven-depcheck")
 	mavenSettings := fs.String("maven-settings", "", "Java only: path to a settings.xml to use for the Maven dependency-resolution check; implies --maven-depcheck")
 	mavenCentralOnly := fs.Bool("maven-central-only", false, "Java only: restrict the Maven dependency-resolution check to the Maven Central baseline (skip the customer-mirror leg); implies --maven-depcheck")
+	noSDKInstall := fs.Bool("no-sdk-install", false, "Do not fetch the pinned Camunda SDK for the tier-2 checks when it isn't already installed. Those checks then report SKIP instead of confirming the real SDK reaches the cluster (env: CAMUNDA_SDK_AUTO_INSTALL=0)")
 	tsProxySupport := fs.Bool("ts-proxy-support", false, "TypeScript only: route the SDK-snippet (tier 2) check through --proxy via a hand-written fetch override, instead of the default behavior of mirroring the real SDK exactly (which has zero proxy support and silently connects direct). Opt-in because it changes what's actually being tested (env: CAMUNDA_TS_PROXY_SUPPORT)")
 
 	javaHome := fs.String("java-home", "", "Java only: the JDK to check with (a directory; its bin/java is used), instead of whichever javac/java comes first on PATH. Use when the machine has several JDKs and the exercises run on a specific one — each JDK has its own cacerts trust store (env: CAMUNDA_JAVA_HOME)")
@@ -222,6 +231,15 @@ func Parse(argv []string) (*Config, error) {
 	// Providing any --maven-* config implies the operator wants the depcheck to
 	// run, so treat it as opt-in too (matches the Java probe's own logic).
 	cfg.MavenDepcheck = *mavenDepcheck || cfg.MavenCentralOnly || cfg.MavenMirror != "" || cfg.MavenSettings != ""
+
+	// The SDK fetch is opt-OUT, so the env form has to be able to turn it off
+	// on its own, unlike the opt-in flags above. Explicit flag still wins.
+	cfg.NoSDKInstall = *noSDKInstall
+	if !setFlags["no-sdk-install"] {
+		if v := strings.ToLower(strings.TrimSpace(os.Getenv("CAMUNDA_SDK_AUTO_INSTALL"))); v != "" {
+			cfg.NoSDKInstall = v == "0" || v == "false" || v == "no" || v == "off"
+		}
+	}
 
 	if cfg.ProxyURL != "" {
 		if err := validateProxyScheme(cfg.ProxyURL); err != nil {

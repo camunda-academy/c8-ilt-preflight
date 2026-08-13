@@ -791,3 +791,22 @@ func TestProbeEnv_StripsCredentialAliases(t *testing.T) {
 		t.Errorf("full mode should pass credentials through, got %v", got)
 	}
 }
+
+// TestProbeEnv_SDKInstallIsExplicitBothWays guards the tier-2 SDK fetch being
+// opt-OUT: the launcher must state the decision outright in both directions,
+// never leave it unset. Unset would hand the choice to a stale
+// CAMUNDA_SDK_AUTO_INSTALL already exported in the participant's shell, so the
+// flag they actually passed would silently lose.
+func TestProbeEnv_SDKInstallIsExplicitBothWays(t *testing.T) {
+	t.Setenv("CAMUNDA_SDK_AUTO_INSTALL", "0") // ambient value that must not win
+
+	env := probeEnv(ProbeConfig{Mode: "network"})
+	if got := count(env, "CAMUNDA_SDK_AUTO_INSTALL"); len(got) != 1 || got[0] != "CAMUNDA_SDK_AUTO_INSTALL=1" {
+		t.Errorf("default = %v, want exactly [CAMUNDA_SDK_AUTO_INSTALL=1] (fetch is the default, ambient value must not leak through)", got)
+	}
+
+	env = probeEnv(ProbeConfig{Mode: "network", NoSDKInstall: true})
+	if got := count(env, "CAMUNDA_SDK_AUTO_INSTALL"); len(got) != 1 || got[0] != "CAMUNDA_SDK_AUTO_INSTALL=0" {
+		t.Errorf("--no-sdk-install = %v, want exactly [CAMUNDA_SDK_AUTO_INSTALL=0]", got)
+	}
+}

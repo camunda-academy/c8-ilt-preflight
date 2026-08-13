@@ -81,9 +81,18 @@ rem Camunda.Orchestration.Sdk NuGet package restored; opt-in fetch, same
 rem reasoning as every other language's auto-install). ---
 set "SDK_ASSETS=%DIR%SdkProbe\obj\project.assets.json"
 
-set AUTO_INSTALL=0
-if "!CAMUNDA_SDK_AUTO_INSTALL!"=="1" set AUTO_INSTALL=1
-if "!CAMUNDA_SDK_AUTO_INSTALL!"=="true" set AUTO_INSTALL=1
+rem Fetching the pinned SDK is the DEFAULT, and opting out is explicit. A tier
+rem that silently SKIPs answers nothing about whether the real client reaches
+rem the cluster, which is the question this tier exists to settle -- and a SKIP
+rem sitting among PASS lines reads as "fine" to a participant scanning output.
+rem Opt out with --no-install or CAMUNDA_SDK_AUTO_INSTALL=0.
+rem /i for a case-insensitive compare, and !VAR! (delayed) so the value is never
+rem re-parsed as command syntax the way %VAR% inside a block would be.
+set AUTO_INSTALL=1
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="0" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="false" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="no" set AUTO_INSTALL=0
+if /i "!CAMUNDA_SDK_AUTO_INSTALL!"=="off" set AUTO_INSTALL=0
 rem A shift-scan over %1, not `for %%A in (%*)`: an unquoted %* in a for-set is
 rem expanded before tokenization, so an argument containing & or | would run as
 rem a command, and it glob-expands against the working directory. %~1 strips
@@ -91,7 +100,9 @@ rem surrounding quotes and never re-parses. `shift` does not affect %*, which is
 rem still forwarded intact to the probes below.
 :scanArgs
 if "%~1"=="" goto :scanArgsDone
-if "%~1"=="--install" set AUTO_INSTALL=1
+rem --install is still accepted so existing muscle memory keeps working; it is
+rem now a no-op, since fetching is the default.
+if "%~1"=="--no-install" set AUTO_INSTALL=0
 shift
 goto :scanArgs
 :scanArgsDone
@@ -128,7 +139,7 @@ if !SDK_MAJOR! LSS 8 (
     echo {"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"the SDK check could not be built even though its packages resolved -- see the dotnet build output on stderr. On a restricted network this is usually a targeting pack the SDK still needs from nuget.org. The mandatory native trust check above is unaffected and its result stands."}
   )
 ) else (
-  echo {"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"Camunda.Orchestration.Sdk not resolved -- run: dotnet restore layer2/csharp/SdkProbe/SdkProbe.csproj --locked-mode, or set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to fetch it automatically next run"}
+  echo {"runtime":"csharp","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"Camunda.Orchestration.Sdk not resolved, so the real .NET SDK was not exercised. Restore it manually with: dotnet restore layer2/csharp/SdkProbe/SdkProbe.csproj --locked-mode. If you passed --no-sdk-install, or set CAMUNDA_SDK_AUTO_INSTALL=0, re-run without it to fetch it automatically."}
 )
 
 exit /b %RC%
