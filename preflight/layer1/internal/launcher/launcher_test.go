@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"c8preflight/internal/model"
 )
@@ -451,6 +452,67 @@ func writeFakeBinary(t *testing.T, name string, exitCode int, line string) strin
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestInvokeProbes_CrashStderrTruncation guards the two properties a real
+// field case exposed: a mandatory diagnostic field (a crashed probe's stderr,
+// the ONLY evidence when a stack died before producing any result) was being
+// cut at 300 bytes -- too short for build-tool errors, which routinely run
+// long and put the useful part (which artifact, which file) past the first
+// few hundred characters -- using a byte-slice truncation that could also
+// split a multi-byte UTF-8 rune in half, which json.Marshal then silently
+// mangles to a replacement character.
+//
+// The stderr content is constructed so a naive s[:4000] cuts exactly through
+// the first byte of a 2-byte rune -- a truncation bug and an off-by-one in
+// the boundary math would both show up as invalid UTF-8 here, not just a
+// coincidentally-fine cut.
+func TestInvokeProbes_CrashStderrTruncation(t *testing.T) {
+	marker := "MARKER-PAST-OLD-300-CAP"
+	padding := strings.Repeat("x", 3999-len(marker)) // marker+padding = 3999 bytes
+	stderrText := marker + padding + "ä" + strings.Repeat("y", 500)
+
+	dir := t.TempDir()
+	stderrFile := filepath.Join(dir, "stderr.txt")
+	if err := os.WriteFile(stderrFile, []byte(stderrText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var entry string
+	if runtime.GOOS == "windows" {
+		entry = filepath.Join(dir, "run.cmd")
+		script := "@echo off\r\ntype \"" + stderrFile + "\" 1>&2\r\nexit /b 1\r\n"
+		if err := os.WriteFile(entry, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		entry = filepath.Join(dir, "run.sh")
+		script := "#!/bin/sh\ncat \"" + stderrFile + "\" 1>&2\nexit 1\n"
+		if err := os.WriteFile(entry, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No stdout at all -- exercises the zero-fragment fallback path, the
+	// other of the two stderr-embedding call sites this test covers.
+	frags := invokeProbes(context.Background(), "csharp", entry, ProbeConfig{Mode: "network"}, nil)
+	if len(frags) != 1 {
+		t.Fatalf("got %d fragments, want 1 (the synthesized crash fragment): %+v", len(frags), frags)
+	}
+	got := frags[0].Detail
+
+	if !utf8.ValidString(got) {
+		t.Errorf("Detail is not valid UTF-8 -- truncation split a multi-byte rune: %q", got)
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Errorf("Detail contains a Unicode replacement character -- a byte sequence was corrupted: %q", got)
+	}
+	if !strings.Contains(got, marker) {
+		t.Errorf("Detail lost content a 300-byte cap would have cut -- the raised limit isn't taking effect. Detail: %q", got)
+	}
+	if !strings.Contains(got, "(truncated)") {
+		t.Error("Detail should still show the truncation marker -- the test's stderr is longer than the (generous) cap")
+	}
 }
 
 // writeTestProbe writes a minimal standalone probe entrypoint (matching the

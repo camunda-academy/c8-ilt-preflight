@@ -81,7 +81,7 @@
 // HttpEnvironmentProxy), which DOES check HTTP_PROXY/HTTPS_PROXY environment
 // variables cross-platform since .NET Core - a genuine, positive difference
 // from Node (whose fetch ignores these vars entirely) and Java (which needs
-// JVM system properties, not env vars). Verified live via mitmproxy.
+// JVM system properties, not env vars).
 //
 // Logging / stdout-contamination finding, verified against
 // SdkConsoleLoggerFactory.cs + CamundaConfig.cs source, NOT a credential leak
@@ -215,8 +215,7 @@ async Task<int> RunAsync(string[] a)
         catch (CamundaAuthException cae)
         {
             // A rejected/misconfigured OAuth token fetch (e.g. a bad client
-            // secret) -- verified live with deliberately fake credentials.
-            // CamundaAuthException is NOT
+            // secret). CamundaAuthException is NOT
             // an HttpSdkException (the rejection happens against the OAuth
             // token endpoint, not the cluster's own REST API) and carries no
             // structural HTTP-status/socket info ClassifyTransportError can
@@ -293,8 +292,7 @@ async Task<int> RunAsync(string[] a)
             catch (CamundaAuthException cae)
             {
                 // See the identical catch on the status check above -- same
-                // OAuth-token-fetch-failure class, verified live with fake
-                // credentials.
+                // OAuth-token-fetch-failure class.
                 Console.WriteLine(Shared.EmitFragment(topologyTarget, "FAIL", "OAUTH_TOKEN_FAIL", "OAuth token request failed: " + cae.Message, trustLabel));
                 exitCode = 1;
             }

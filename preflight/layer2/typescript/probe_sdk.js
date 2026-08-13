@@ -75,11 +75,10 @@
  * is needed for this language.
  *
  * Proxy-support note (see installProxyDispatcher's own doc comment for the
- * full story): the SDK has ZERO built-in HTTP(S)_PROXY
- * handling (confirmed absent from its source, and confirmed empirically --
- * pointing HTTPS_PROXY at a dead port, both raw fetch() and this SDK's own
- * getStatus() still succeeded with a real response instead of a connection
- * error). By DEFAULT this probe mirrors that exactly -- a configured --proxy
+ * full story): the SDK has ZERO built-in HTTP(S)_PROXY handling -- absent
+ * from its source, and observably so: pointing HTTPS_PROXY at a dead port,
+ * both raw fetch() and this SDK's own getStatus() still succeed with a real
+ * response instead of a connection error. By DEFAULT this probe mirrors that exactly -- a configured --proxy
  * is silently bypassed, same as an unmodified real application using this
  * SDK would experience. --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT opts
  * into routing through the proxy instead, via undici's own official
@@ -87,7 +86,7 @@
  * engineering team should apply to their own application -- three lines of
  * setup, no custom HTTP client needed).
  *
- * Auth-strategy auto-upgrade gap, VERIFIED LIVE (mirrors Python's known gap
+ * Auth-strategy auto-upgrade gap (mirrors Python's known gap
  * #1, a different mechanism, same risk): this
  * SDK's config hydration auto-upgrades CAMUNDA_AUTH_STRATEGY from its NONE
  * default to OAUTH the moment CAMUNDA_CLIENT_ID/CAMUNDA_CLIENT_SECRET are
@@ -97,7 +96,7 @@
  * credentials happen to be in the shell (e.g. left over from an earlier
  * full-mode run). This probe defeats that by explicitly passing
  * `CAMUNDA_AUTH_STRATEGY: 'NONE'` via the `config` override in network mode
- * -- verified live that an explicit value (via env OR this override) fully
+ * -- an explicit value (via env OR this override) fully
  * disables the auto-upgrade, regardless of what credentials are present.
  * ---------------------------------------------------------------------------
  */
@@ -156,7 +155,7 @@ function installSdk() {
       timeout: INSTALL_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Windows: spawning "npm.cmd" directly via execFileSync can fail with
-      // EINVAL (verified live in this environment) -- npm.cmd is a batch
+      // EINVAL in this environment -- npm.cmd is a batch
       // shim, not a native PE executable, so it needs cmd.exe to interpret
       // it. shell:true routes the spawn through cmd.exe/sh as appropriate;
       // harmless on POSIX where "npm" is a real executable.
@@ -176,11 +175,11 @@ function installSdk() {
  * `setGlobalDispatcher` -- NOT a hand-written HTTP client.
  *
  * WHY THIS EXISTS: the real SDK's own HTTP client (Node's global
- * `fetch`/undici) does NOT honor HTTP_PROXY/HTTPS_PROXY at all (confirmed
- * absent from its source, and confirmed empirically: pointing
- * HTTPS_PROXY at a dead port that nothing listens on, both raw fetch() and
- * the SDK's own getStatus() still succeeded with a real response instead of
- * a connection error) -- so when `--proxy` is set, this probe's own tier-1
+ * `fetch`/undici) does NOT honor HTTP_PROXY/HTTPS_PROXY at all -- absent
+ * from its source, and observably so: pointing HTTPS_PROXY at a dead port
+ * that nothing listens on, both raw fetch() and the SDK's own getStatus()
+ * still succeed with a real response instead of a connection error -- so
+ * when `--proxy` is set, this probe's own tier-1
  * native check correctly tunnels through it while tier 2 silently bypassed
  * the proxy entirely and connected straight to the real internet.
  *
@@ -190,7 +189,7 @@ function installSdk() {
  * instead: no redirect-following, a minimal chunked-decoder, and tight
  * coupling to this SDK's exact today's request shape. `undici` (the same
  * library Node's OWN global fetch is built on) ships an official `ProxyAgent`
- * dispatcher for exactly this use case -- confirmed live it: (a) correctly
+ * dispatcher for exactly this use case: it (a) correctly
  * tunnels a real request through a local test proxy and (b) auto-derives
  * Basic proxy-auth from the proxy URL's userinfo, same as this probe's own
  * hand-rolled tunnel did (verified against `ProxyAgent`'s own source,
@@ -257,7 +256,7 @@ async function runChecks(sdkModule) {
   // Normalize the REST base the same way the Go binary and the Python/Java
   // probes do -- see _shared.js's normalizeRestBase doc comment for the
   // verified "SDK does not tolerate Console's stray :443 path segment" gap,
-  // confirmed live for this SDK too.
+  // which applies to this SDK too.
   const { restBase, host, wasNormalized } = normalizeRestBase();
 
   // See installProxyDispatcher's doc comment: the real SDK's own fetch
@@ -335,12 +334,12 @@ async function runChecks(sdkModule) {
   try {
     const client = createCamundaClient({
       config,
-      // NullLogger equivalent -- REQUIRED, not optional. Verified live: at
+      // NullLogger equivalent -- REQUIRED, not optional. At
       // 'debug' level, this SDK's own config.hydrated event logs
       // CAMUNDA_CLIENT_ID COMPLETELY UNMASKED (only
       // CAMUNDA_CLIENT_SECRET gets redacted) -- the same class of leak Python's
-      // probe_sdk.py found and fixed with an explicit NullLogger(). GOOD NEWS,
-      // also verified live: unlike Python (where CAMUNDA_SDK_LOG_LEVEL=silent
+      // probe_sdk.py found and fixed with an explicit NullLogger(). GOOD NEWS:
+      // unlike Python (where CAMUNDA_SDK_LOG_LEVEL=silent
       // was confirmed NOT to suppress the leak, requiring logger=NullLogger()
       // specifically), this SDK's log.level:'silent' DOES fully suppress every
       // transport call, including config.hydrated -- confirmed by wiring a
@@ -446,8 +445,8 @@ async function main() {
   // Defense-in-depth (mirrors probe_sdk.py's contextlib.redirect_stdout
   // guard): this probe's stdout is a line-delimited JSON channel the launcher
   // parses, so redirect stdout to stderr while requiring the SDK, in case a
-  // transitive dependency ever prints a banner at import time. Verified live
-  // this specific SDK version prints nothing at require() time; kept anyway
+  // transitive dependency ever prints a banner at import time. This specific
+  // SDK version prints nothing at require() time; kept anyway
   // as a cheap guard against a future version regressing this.
   const realWrite = process.stdout.write.bind(process.stdout);
   let sdkModule;

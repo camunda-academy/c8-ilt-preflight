@@ -21,23 +21,22 @@
  *   {runtime, trustStoreExercised, target, verdict, errorClass, detail}
  *
  * ---------------------------------------------------------------------------
- * CRITICAL, verified (not assumed) -- both from the real SDK's published
- * source AND empirically against a live Node process: when
- * CAMUNDA_MTLS_CA_PATH is set, this probe's custom-CA trust context REPLACES
+ * CRITICAL, verified against the real SDK's published source (not assumed):
+ * when CAMUNDA_MTLS_CA_PATH is set, this probe's custom-CA trust context REPLACES
  * Node's default root store; it does NOT append to it.
  *
  * Why: @camunda8/orchestration-cluster-api 9.1.2's own mTLS handling (its
  * published dist/chunk-WSCXETVI.js) builds `new https.Agent({ca: <PEM>})`
  * whenever CAMUNDA_MTLS_CA_PATH/_CA/_CERT_PATH/_KEY_PATH are set -- it does
  * NOT spread Node's own `tls.rootCertificates` into that `ca` value first.
- * Empirically verified live in this environment: an https.Agent constructed
- * with ONLY a (dummy) custom `ca` failed to verify a real public-CA-signed
- * host (login.cloud.camunda.io) with UNABLE_TO_GET_ISSUER_CERT_LOCALLY,
- * confirming Node's documented tls.createSecureContext() behavior that
- * supplying `ca` REPLACES the well-known Mozilla-curated default list rather
- * than extending it. (Spreading `[...tls.rootCertificates, customCa]`
- * instead DOES append correctly -- also verified live -- but that is not
- * what the real SDK does, so this probe does not do it either.)
+ * An https.Agent constructed with ONLY a (dummy) custom `ca` fails to
+ * verify a real public-CA-signed host (login.cloud.camunda.io) with
+ * UNABLE_TO_GET_ISSUER_CERT_LOCALLY, confirming Node's documented
+ * tls.createSecureContext() behavior that supplying `ca` REPLACES the
+ * well-known Mozilla-curated default list rather than extending it.
+ * (Spreading `[...tls.rootCertificates, customCa]` instead DOES append
+ * correctly -- but that is not what the real SDK does, so this probe does
+ * not do it either.)
  *
  * This means the TypeScript SDK's real custom-CA behavior matches JAVA's
  * (replace), not Go/Python's (append). An initial assumption of append,

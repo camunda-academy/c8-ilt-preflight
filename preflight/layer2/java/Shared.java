@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
  *
  * Java's single-file source-launch (`java Probe.java`) does NOT resolve a
  * sibling top-level class the way Python's `import _shared` resolves a
- * sibling module -- verified live: `java Main.java` fails to find a class
+ * sibling module -- `java Main.java` fails to find a class
  * defined only in a sibling Shared.java. So these Java probes are compiled
  * explicitly (`javac Probe.java Shared.java && java Probe`) rather than
  * launched via the single-file convention. Still zero third-party build
@@ -207,8 +207,8 @@ final class Shared {
    * This exists because Camunda Console's copy-paste CAMUNDA_REST_ADDRESS
    * form embeds a stray ':443' path segment
    * (https://&lt;host&gt;/:443/&lt;clusterId&gt;/v2/) that real SDKs do not
-   * tolerate -- verified live for BOTH the Python SDK and the Java SDK: the
-   * raw form yields a Cloudflare 'default backend - 404'.
+   * tolerate: the raw form yields a Cloudflare 'default backend - 404' for
+   * both the Python SDK and the Java SDK.
    * NOTE: for the Java SDK probe, normalizing here is necessary but not
    * sufficient -- the builder must ALSO call applyEnvironmentVariableOverrides
    * (false), or build() re-reads the raw CAMUNDA_REST_ADDRESS env and clobbers
@@ -308,7 +308,7 @@ final class Shared {
    * never consults these properties (see javaTrustStoreIgnoredWarning).
    *
    * Returns a WARN fragment if the path doesn't exist, in which case the
-   * property is deliberately NOT set -- verified live: the JDK's default
+   * property is deliberately NOT set: the JDK's default
    * TrustManagerFactory SILENTLY falls back to the regular cacerts trust
    * store when javax.net.ssl.trustStore names a missing file (documented JSSE
    * behavior, not a bug), which would otherwise produce a quiet false PASS

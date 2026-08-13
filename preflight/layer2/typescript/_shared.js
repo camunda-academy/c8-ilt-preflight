@@ -153,7 +153,7 @@ function resolveApiHost() {
  * Java's Shared.normalizeRestBase.
  *
  * This exists because the real Camunda TypeScript SDK does NOT tolerate the
- * exact string Camunda Console tells users to copy either -- verified live
+ * exact string Camunda Console tells users to copy either -- verified
  * against the SDK's own config-hydration source (dist/chunk-WSCXETVI.js): it
  * only appends '/v2' when the path doesn't already end in it, with no UUID
  * extraction or stray-segment stripping.
@@ -210,9 +210,9 @@ function normalizeRestBase() {
 // error.code values mirror the Go binary's classifyDialError (httpclient.go)
 // and probe.py/Shared.java's classification -- same DNS/refused/timeout/cert
 // distinctions, expressed via Node's actual documented error.code values
-// (verified live: net.createConnection against a non-existent hostname threw
-// code ENOTFOUND; against a closed port threw
-// ECONNREFUSED; a certificate-trust failure threw
+// (net.createConnection against a non-existent hostname throws
+// code ENOTFOUND; against a closed port throws
+// ECONNREFUSED; a certificate-trust failure throws
 // UNABLE_TO_GET_ISSUER_CERT_LOCALLY). ETIMEDOUT/ABORT_ERR are set by this
 // project's own timeout wrappers (Node's raw net/tls sockets don't
 // self-assign a `.code` on a bare 'timeout' event; AbortSignal.timeout()
@@ -348,9 +348,9 @@ class ProxyError extends Error {
 /**
  * Opens an HTTP CONNECT tunnel through proxyUrl to host:port -- raw socket,
  * manual CONNECT handshake, Basic proxy-auth from the URL's userinfo,
- * upgrading to TLS only after the tunnel is established. Confirmed live
- * (probe.js's original research): Node's tls.connect()/https/global fetch do
- * NOT auto-tunnel through HTTPS_PROXY/HTTP_PROXY, and the real SDK itself has
+ * upgrading to TLS only after the tunnel is established. Node's
+ * tls.connect()/https/global fetch do NOT auto-tunnel through
+ * HTTPS_PROXY/HTTP_PROXY, and the real SDK itself has
  * ZERO proxy-env-var handling of its own -- this manual tunnel is the only
  * way this project's proxy support works for Node at all, for either tier
  * (probe_sdk.js's proxy-aware fetch override reuses this exact function so

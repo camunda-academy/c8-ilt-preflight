@@ -401,7 +401,7 @@ func runtimeVersion(bin, stack string) (string, bool) {
 	first := ""
 	for _, line := range strings.Split(string(out), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
-			first = truncate(line, 120)
+			first = redact.Truncate(line, 120)
 			break
 		}
 	}
@@ -737,6 +737,19 @@ const (
 	probeTimeoutWithMavenDepcheck = 10 * time.Minute
 )
 
+// stderrTruncateLimit bounds how much of a crashed probe's stderr gets
+// embedded in its synthesized fragment.
+//
+// This field is the ONLY diagnostic evidence for a stack that crashed before
+// producing any result, so it's deliberately generous rather than kept short
+// like other truncated fields (an OAuth error_description, say): a build
+// tool's error output is genuinely long, and the useful part is often past
+// the first few hundred characters -- confirmed from a real field case where
+// a 300-char cap cut a NuGet failure off mid-path, one line before the
+// project file it named. Still bounded, so a looping/runaway build can't
+// balloon the result file.
+const stderrTruncateLimit = 4000
+
 // invokeProbes runs one probe's standalone entrypoint and streams its stdout
 // JSON fragments per the cross-runtime probe contract, calling onFragment (if
 // non-nil) the moment each line is read -- not after the process exits. A
@@ -808,7 +821,7 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 				Verdict:    model.VerdictProbeError,
 				ErrorClass: model.ErrProbeCrashed,
 				Detail: fmt.Sprintf("probe exited with error (%v) but reported no failing check — at least one of its checks died before producing a result, "+
-					"so this stack was only partially verified (stderr: %s)", runErr, truncate(stderr.String(), 300)),
+					"so this stack was only partially verified (stderr: %s)", runErr, redact.Truncate(stderr.String(), stderrTruncateLimit)),
 			}
 			frags = append(frags, partial)
 			if onFragment != nil {
@@ -822,7 +835,7 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 	// from the exit code, since the probe's stdout isn't parseable.
 	detail := "probe produced no parseable JSON fragment on stdout"
 	if runErr != nil {
-		detail = fmt.Sprintf("probe exited with error: %v (stderr: %s)", runErr, truncate(stderr.String(), 300))
+		detail = fmt.Sprintf("probe exited with error: %v (stderr: %s)", runErr, redact.Truncate(stderr.String(), stderrTruncateLimit))
 	}
 	fallback := model.ProbeFragment{
 		Runtime:             stack,
@@ -882,12 +895,4 @@ func parseFragmentLine(line string) (model.ProbeFragment, bool) {
 		return frag, true
 	}
 	return model.ProbeFragment{}, false
-}
-
-func truncate(s string, max int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "... (truncated)"
 }
