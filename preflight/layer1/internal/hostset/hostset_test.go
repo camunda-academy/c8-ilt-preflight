@@ -62,7 +62,7 @@ func TestResolveRejectsBadHost(t *testing.T) {
 func TestRegionPrecedence(t *testing.T) {
 	tgt, err := Resolve(Inputs{
 		ExplicitHost: "https://bru-2.api.camunda.io/" + testClusterID,
-		Region:       "dsyd-1",
+		Region:       "syd-1",
 	})
 	if err != nil {
 		t.Fatal(err)

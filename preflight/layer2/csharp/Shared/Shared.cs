@@ -297,9 +297,10 @@ public static class Shared
     // exercises for the SAME env var, or it's worthless as a proxy for "does
     // the SDK trust this."
     //
-    // CRITICAL FINDING, verified against source (NOT assumed from the
-    // general ".NET also trusts the OS store" claim, which by itself says
-    // nothing about what happens once a custom CA is ALSO configured):
+    // Verified against Camunda.Orchestration.Sdk 9.1.3 source
+    // (src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs) - what happens once
+    // a custom CA is ALSO configured, which ".NET trusts the OS store" by
+    // itself does not answer:
     //
     // The real SDK's ServerCertificateCustomValidationCallback (1) returns
     // true immediately if the DEFAULT OS-store validation already succeeded
@@ -312,8 +313,7 @@ public static class Shared
     // functionally APPEND semantics (any endpoint covered by either store
     // passes), the OPPOSITE of Java's and TypeScript's real "replace the
     // whole trust store" behavior, and matching Go's/Python's append
-    // precedent instead. This is a genuine correction to the ambiguous
-    // general claim, verified from source.
+    // precedent instead.
     //
     // Also verified: a missing/unreadable custom CA file throws
     // FileNotFoundException at TlsHelper.ReadPath -- a LOUD failure at
@@ -380,8 +380,7 @@ public static class Shared
     /// <summary>
     /// The exact validation logic the real SDK's TlsHelper.BuildHandler uses
     /// (ported, not reimplemented from a description) -- see the TrustContext
-    /// doc comment above for the verified append-semantics finding this
-    /// produces.
+    /// doc comment above for the verified append semantics this produces.
     /// </summary>
     public static bool ValidateWithCustomCa(
         X509Certificate2Collection caCerts,

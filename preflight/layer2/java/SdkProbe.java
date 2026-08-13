@@ -52,10 +52,9 @@ import java.net.URI;
  *  - CRITICAL: relying on the SDK's own env-based auto-wiring for
  *    credentials has two real gaps. (1) CAMUNDA_TOKEN_AUDIENCE has NO built-in
  *    default in the raw SDK (unlike this tool's Go binary, which defaults it
- *    to "zeebe.camunda.io" in code) -- auto-wiring crashed with
- *    "Expected valid audience but none was provided" even for the
- *    network-mode-analog get_status() call, on a real .env that omits
- *    CAMUNDA_TOKEN_AUDIENCE because the Go tool never required it to be set.
+ *    to "zeebe.camunda.io" in code) -- so whenever that variable is unset,
+ *    auto-wiring fails with "Expected valid audience but none was provided",
+ *    including for the network-mode-analog get_status() call.
  *    (2) the raw SDK's own OAuth-URL env var is CAMUNDA_AUTHORIZATION_SERVER_URL,
  *    NOT CAMUNDA_OAUTH_URL (this tool's Go/Python convention) -- yet another
  *    per-language name mismatch, on top of the CA-path one. Rather than add a
@@ -171,12 +170,10 @@ public final class SdkProbe {
     // true, and build() then re-reads CAMUNDA_REST_ADDRESS from
     // the environment and OVERWRITES the restAddress we set below
     // (CamundaClientBuilderImpl.applyOverrides -> restAddress(getURIFromString(env))).
-    // Our env holds the raw Console ":443" copy-paste form, so the override
-    // silently undid our normalization and the SDK hit .../:443/.../v2/status ->
+    // When the environment holds the raw Console ":443" form, that override
+    // undoes the normalization and the SDK hits .../:443/.../v2/status ->
     // Cloudflare "default backend - 404". We set restAddress, credentials, and
     // caCertificatePath explicitly here, so we want NONE of the env re-reads.
-    // (This also confirms live that the raw Console form genuinely breaks the
-    // Java SDK -- previously unverified for Java specifically.)
     CamundaClientBuilder builder =
         CamundaClient.newClientBuilder()
             .applyEnvironmentVariableOverrides(false)
@@ -245,9 +242,8 @@ public final class SdkProbe {
         // network" (severity: blocks training right now; attribution: never
         // the customer's fault -- the Go binary's IsOurClusterProblem/
         // ExitOurClusterProblem convey that distinction, not the verdict).
-        // A real 404-default-backend blip made this probe hard-FAIL while the
-        // Go binary WARNed on the identical situation -- the exact
-        // Go-vs-probe inconsistency this fixes. Note MalformedResponseException
+        // Classified this way so the probe and the Go binary agree on the
+        // identical situation. Note MalformedResponseException
         // (thrown when the 404 body isn't problem+json) extends
         // ClientHttpException and carries .code(), so it lands here too.
         if (e.code() == 503) {

@@ -19,13 +19,10 @@ func TestParse_HelpDoesNotLeakEnvCreds(t *testing.T) {
 	t.Setenv("CAMUNDA_REST_ADDRESS", "https://bru-2.api.camunda.io/LEAKY-CLUSTER-ID")
 
 	// Flag usage is written to os.Stderr by default; capture it via a pipe,
-	// draining it CONCURRENTLY in a goroutine. An OS pipe's buffer is finite
-	// (observed live: this test deadlocked for 10 minutes once --help's
-	// usage text grew past that threshold after adding a new flag -- the
-	// write blocked with nothing draining the read end, since the original
-	// code only read from r AFTER the write had already returned). Reading
-	// concurrently makes this correct regardless of how large --help's
-	// output ever grows.
+	// draining it CONCURRENTLY in a goroutine. An OS pipe's buffer is finite,
+	// so a write larger than the buffer blocks until something drains the
+	// read end. Reading concurrently makes this correct regardless of how
+	// large --help's output ever grows.
 	old := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
@@ -229,10 +226,9 @@ func TestParse_NetworkModeWithInsecureFlagIsAllowed(t *testing.T) {
 
 // TestParse_EnvStillAppliedAfterParse confirms the leak fix didn't break the
 // documented precedence: env values are still picked up when no flag is
-// passed. Mode is NOT auto-detected from credential presence (removed --
-// silently switching to full mode just because CAMUNDA_CLIENT_ID/SECRET
-// happen to be set was a surprise footgun): network is the hard default
-// even with creds present in the environment, until --mode full is passed.
+// passed. Mode is NOT auto-detected from credential presence: network is the
+// hard default even with creds present in the environment, until --mode full
+// is passed.
 func TestParse_EnvStillAppliedAfterParse(t *testing.T) {
 	t.Setenv("CAMUNDA_CLIENT_ID", "env-id")
 	t.Setenv("CAMUNDA_CLIENT_SECRET", "env-secret")

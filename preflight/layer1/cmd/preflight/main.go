@@ -480,7 +480,18 @@ func skipRest(add func(model.Stage), host string, names ...string) {
 // launcher treats as "no probe available" (SKIP), not an error.
 func findLayer2Dir() string {
 	if override := strings.TrimSpace(os.Getenv("CAMUNDA_LAYER2_DIR")); override != "" {
-		return override
+		// Absolute and a real directory, or ignored. A relative value would be
+		// resolved against the working directory by the os.Stat and exec calls
+		// downstream, which reintroduces exactly the CWD-relative probe
+		// execution the anchored lookup below exists to prevent — and the
+		// tool's own "set CAMUNDA_LAYER2_DIR" hint invites a relative answer.
+		if !filepath.IsAbs(override) {
+			fmt.Fprintf(os.Stderr, "warning: ignoring CAMUNDA_LAYER2_DIR %q — it must be an absolute path\n", override)
+		} else if st, err := os.Stat(override); err != nil || !st.IsDir() {
+			fmt.Fprintf(os.Stderr, "warning: ignoring CAMUNDA_LAYER2_DIR %q — not a directory\n", override)
+		} else {
+			return override
+		}
 	}
 	exe, err := os.Executable()
 	if err != nil {

@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -151,5 +152,63 @@ func TestMaskProxyValue(t *testing.T) {
 		if strings.Contains(got, "proxy.internal.corp") || strings.Contains(got, "10.20.30.40") {
 			t.Errorf("MaskProxyValue(%q) = %q leaked part of the real value", raw, got)
 		}
+	}
+}
+
+// TestScanForLeak_CatchesJSONEscapedSecret closes a real gap: the scan runs
+// against already-marshalled JSON, where encoding/json escapes " and \ and
+// HTML-escapes & < >. A plaintext comparison therefore missed exactly the
+// characters a user-chosen proxy or truststore password is most likely to
+// contain, so the refuse-to-write guard would pass and the secret would be
+// written into the file the tool tells people to share.
+func TestScanForLeak_CatchesJSONEscapedSecret(t *testing.T) {
+	for _, secret := range []string{`P@ss&w0rd`, `a<b>c`, `tok"en`, `back\slash`, `plainSecret123`} {
+		s := Secrets{ProxyPassword: secret}
+		marshalled, err := json.Marshal(map[string]string{"detail": "proxy said: " + secret})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reason := s.ScanForLeak(string(marshalled)); reason == "" {
+			t.Errorf("secret %q survived the leak scan in marshalled JSON: %s", secret, marshalled)
+		}
+	}
+}
+
+// TestScrub_MasksJSONEscapedSecret is the same gap on the masking path: Scrub
+// also runs over marshalled JSON, so it has to recognize the escaped form too
+// or the raw value stays in the written file.
+func TestScrub_MasksJSONEscapedSecret(t *testing.T) {
+	secret := `P@ss&w0rd`
+	s := Secrets{ProxyPassword: secret}
+	marshalled, err := json.Marshal(map[string]string{"detail": "proxy said: " + secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.Scrub(string(marshalled))
+	if strings.Contains(got, `P@ss&w0rd`) || strings.Contains(got, secret) {
+		t.Errorf("Scrub left the secret in either form: %q", got)
+	}
+}
+
+// TestScanForLeak_ProxyProseDoesNotSuppressOutput guards a remote
+// denial-of-output: a bare match on the literal substring "Bearer " would trip
+// on prose a hostile or merely chatty proxy can put in an error page. That text
+// reaches a stage detail, and tripping the guard suppresses the ENTIRE result
+// file — on exactly the broken-network run where the participant needs one.
+func TestScanForLeak_ProxyProseDoesNotSuppressOutput(t *testing.T) {
+	var s Secrets
+	for _, prose := range []string{
+		`Authorization must use the "Bearer " scheme`,
+		`Bearer token required`,
+		`bearer authentication is not enabled`,
+	} {
+		if reason := s.ScanForLeak(prose); reason != "" {
+			t.Errorf("proxy prose %q suppressed the result file: %s", prose, reason)
+		}
+	}
+	// A real token must still be caught.
+	realToken := "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghij"
+	if reason := s.ScanForLeak(realToken); reason == "" {
+		t.Error("an actual bearer token was not detected")
 	}
 }

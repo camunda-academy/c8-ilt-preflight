@@ -39,7 +39,8 @@ func WriteResultJSON(r model.Result, outPath string, secrets redact.Secrets) (st
 	data = []byte(secrets.Scrub(string(data)))
 
 	path := outPath
-	if path == "" {
+	defaultName := outPath == ""
+	if defaultName {
 		filename := fmt.Sprintf("%s-%s.json", defaultFilenamePrefix, time.Now().UTC().Format("20060102T150405Z"))
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -51,7 +52,23 @@ func WriteResultJSON(r model.Result, outPath string, secrets redact.Secrets) (st
 	// 0o600, not 0o644: the result carries the cluster's hosts/IPs and proxy
 	// diagnostics, so don't make it world-readable on a shared/multi-user
 	// machine.
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	//
+	// The default, timestamped name is created EXCLUSIVELY: nobody asked for
+	// that exact path, so an existing file there is a planted file or a
+	// symlink, not something to follow. An explicit --out is the operator
+	// naming a path deliberately, so overwriting is the expected behavior
+	// there — but see enforceOwnerOnly below, since a write to a pre-existing
+	// file keeps that file's original mode.
+	writeErr := func() error {
+		if defaultName {
+			return writeExclusive(path, data)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return err
+		}
+		return enforceOwnerOnly(path)
+	}()
+	if err := writeErr; err != nil {
 		// Fall back to temp dir — the target (often cwd, Downloads, or
 		// Program Files) may be read-only on a locked-down machine. The temp
 		// dir is world-writable and the filename is predictable, so create
@@ -65,6 +82,21 @@ func WriteResultJSON(r model.Result, outPath string, secrets redact.Secrets) (st
 	}
 
 	return path, nil
+}
+
+// enforceOwnerOnly re-applies owner-only permissions after a write.
+//
+// os.WriteFile's mode argument only takes effect when it CREATES the file, so
+// writing over an existing world-readable file silently keeps that file's
+// original mode — and the result carries hosts, IPs and proxy diagnostics that
+// the 0o600 above exists to keep off a shared machine. A chmod failure is not
+// fatal: the content is already written, and on Windows the mode maps only to
+// the read-only attribute anyway.
+func enforceOwnerOnly(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+		return nil
+	}
+	return nil
 }
 
 // writeExclusive writes data to path, creating it exclusively (O_EXCL) with
@@ -98,5 +130,9 @@ func WriteLogFile(path, content string, secrets redact.Secrets) error {
 	// Acceptable here (results land in the user's own cwd/profile, which is
 	// per-user by default on Windows) but do not read 0o600 as a hard
 	// multi-user guarantee on that platform.
-	return os.WriteFile(path, []byte(content), 0o600)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return err
+	}
+	// The mode above applies only on creation; an existing file keeps its own.
+	return enforceOwnerOnly(path)
 }

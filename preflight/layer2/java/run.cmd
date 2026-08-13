@@ -23,7 +23,7 @@ rem different installation, and a different trust store, than the one asked for 
 rem exactly the confusion pinning exists to remove. So an unusable pin fails
 rem loudly and names the path it tried.
 rem
-rem Unset behaves exactly as before: plain PATH lookup. Deliberately NOT
+rem Unset means a plain PATH lookup. Deliberately NOT
 rem consulting an ambient JAVA_HOME -- the launcher already detects a
 rem JAVA_HOME-vs-PATH mismatch and warns about it.
 rem
@@ -34,8 +34,8 @@ rem
 rem The failure paths `goto` a label and exit at TOP level rather than running
 rem `exit /b 1` inline. That is not style: with two sibling `if ... ( exit /b 1 )`
 rem blocks inside one outer block, cmd runs the echo and stops the script but
-rem hands back exit code 0 -- verified on this cmd.exe -- so the launcher would
-rem read a broken pin as success. Do not "simplify" these back inline.
+rem hands back exit code 0, so the launcher would read a broken pin as success.
+rem Do not "simplify" these back inline.
 set "JAVAC=javac"
 set "JAVA=java"
 rem `if defined`, not `if not "%VAR%"==""`: the quoted-comparison form expands
@@ -115,8 +115,9 @@ rem --- Tier 1: native trust probe (mandatory, no dependency) ---
 "!JAVAC!" -encoding UTF-8 -d "%OUT%" "%DIR%Probe.java" "%DIR%Shared.java"
 if %ERRORLEVEL%==0 (
   rem -Dstdout.encoding=UTF-8 / -Dstderr.encoding=UTF-8: without these, Windows'
-  rem default platform charset mangles non-ASCII bytes (an em-dash in a
-  rem remediation message became a replacement character).
+  rem default platform charset mangles non-ASCII bytes, so any em-dash or
+  rem accented character in a remediation message arrives as a replacement
+  rem character.
   "!JAVA!" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "%OUT%" Probe %*
   if not !ERRORLEVEL!==0 set RC=1
 ) else (
@@ -154,11 +155,11 @@ shift
 goto :scanArgs
 :scanArgsDone
 
-rem MVN_FAILED distinguishes "Maven ran but resolution FAILED" (a real finding --
-rem almost always a broken/misconfigured corporate mirror or a proxy blocking
-rem Central) from "Maven wasn't run at all" (absent / not opted in). Collapsing
-rem both into the same SKIP made a broken mirror emit "install Maven and set the
-rem flag" -- advice the operator had already followed -- and hid a hard training
+rem MVN_FAILED distinguishes "Maven ran but resolution FAILED" (almost always a
+rem broken/misconfigured corporate mirror or a proxy blocking Central) from
+rem "Maven wasn't run at all" (absent / not opted in). Collapsing both into the
+rem same SKIP would make a broken mirror emit "install Maven and set the flag"
+rem -- advice the operator has already followed -- and hide a hard training
 rem blocker behind a benign-looking SKIP.
 set MVN_FAILED=0
 if not exist "%SDK_LIB%\*.jar" if "%AUTO_INSTALL%"=="1" (
@@ -208,7 +209,7 @@ if exist "%SDK_LIB%\*.jar" (
   rem Forward slashes in the path here, NOT backslashes: a literal "sdk\lib\" in
   rem the JSON is invalid ('\l' is not a valid JSON escape), so encoding/json in
   rem the launcher silently drops the whole fragment and this guidance never
-  rem reaches the user on Windows (a pre-existing bug).
+  rem reaches the user on Windows.
   echo {"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved -- install Maven and set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to fetch it automatically, or drop the SDK jars into sdk/lib/ yourself"}
 )
 

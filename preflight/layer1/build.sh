@@ -47,5 +47,4 @@ echo
 echo "Done. Artifacts + checksums in $RELEASES_DIR:"
 cat "$CHECKSUM_FILE"
 echo
-echo "NOTE: artifacts are UNSIGNED (code-signing is a deferred follow-up)."
-echo "Until then, the checksums above are what an allowlist-by-hash rule should reference."
+echo "NOTE: artifacts are UNSIGNED. Use the checksums above for an allowlist-by-hash rule."

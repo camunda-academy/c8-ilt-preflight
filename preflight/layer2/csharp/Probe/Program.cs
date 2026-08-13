@@ -13,8 +13,8 @@
 //       Camunda.Orchestration.Sdk itself reads (verified in its own README +
 //       ConfigurationHydrator.cs source). Unlike Java (whose real client
 //       reads a DIFFERENT name, CAMUNDA_CA_CERTIFICATE_PATH, and needed its
-//       own cross-name mismatch WARN), there is no name trap here -- matches
-//       TypeScript's finding.
+//       own cross-name mismatch WARN), there is no name trap here -- same as
+//       TypeScript.
 //   HTTPS_PROXY / HTTP_PROXY (or lowercase)   explicit proxy, CONNECT-tunneled
 //
 // Emits one JSON fragment per line on stdout, per target, per the
@@ -23,9 +23,9 @@
 //
 // ---------------------------------------------------------------------------
 // CRITICAL, verified against the real SDK's own source (Camunda.Orchestration.
-// Sdk 9.1.3, src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs), NOT assumed
-// from the general ".NET also trusts the OS store" claim (which by itself
-// says nothing about what happens once a custom CA is ALSO configured):
+// Sdk 9.1.3, src/Camunda.Orchestration.Sdk/Runtime/TlsHelper.cs) - what
+// happens once a custom CA is ALSO configured, which ".NET trusts the OS
+// store" by itself does not answer:
 //
 // The real SDK's ServerCertificateCustomValidationCallback (1) returns true
 // immediately if the default OS-store validation already succeeded, and (2)

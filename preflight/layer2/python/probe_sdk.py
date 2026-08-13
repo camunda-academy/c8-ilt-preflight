@@ -96,9 +96,11 @@ def _lock_path():
 
 
 def install_sdk():
-    """Attempt to pip-install the exact-pinned SDK. Returns an error string, or
-    None on success. Retries once with --user for the common locked-down-machine
-    case (no write access to the global site-packages).
+    """Attempt to pip-install the exact-pinned SDK. Returns (error, warn):
+    error is a string, or None on success; warn is a fragment the caller must
+    emit when the install was not hash-verified, or None. Retries once with
+    --user for the common locked-down-machine case (no write access to the
+    global site-packages).
 
     Security: if a hash-locked requirements file sits next to this probe,
     install from it with --require-hashes (pip refuses any artifact whose
@@ -107,17 +109,30 @@ def install_sdk():
     but NOT hash-verified and uses whatever package index pip is configured for
     (PIP_INDEX_URL / pip.conf / an internal mirror), so on an untrusted network
     the operator should pre-install the SDK from a trusted source instead of
-    using auto-install. --no-cache-dir avoids reusing a poisoned local cache.
+    using auto-install. That warning goes to stderr AND to a fragment, because
+    stderr never reaches the result file the customer sends back to the
+    training team. --no-cache-dir avoids reusing a poisoned local cache, and
+    --only-binary=:all: restricts the unverified install to wheels so a
+    source distribution's setup.py cannot execute during it.
     """
     lock = _lock_path()
+    warn = None
     if lock:
         install_args = ["--require-hashes", "-r", lock]
         eprint("[python sdk-probe] installing from hash-locked %s" % LOCK_FILENAME)
     else:
-        install_args = [SDK_SPEC]
+        install_args = ["--only-binary=:all:", SDK_SPEC]
         eprint("[python sdk-probe] SECURITY: installing %s from pip's configured index — version-pinned but NOT" % SDK_SPEC)
         eprint("[python sdk-probe] hash-verified. On an untrusted network, pre-install the SDK from a trusted source")
         eprint("[python sdk-probe] instead, or drop a hash-locked %s next to this probe." % LOCK_FILENAME)
+        warn = fragment(
+            "sdk (install)", "WARN", "CONFIG_ERROR",
+            "the Camunda Python SDK (%s) was auto-installed from the package index pip is configured for "
+            "(PIP_INDEX_URL / pip.conf / an internal mirror). The install was version-pinned but NOT "
+            "hash-verified, because no hash-locked %s was present next to this probe — so the artifact's "
+            "authenticity was not checked. Wheels only (--only-binary=:all:) was used so no source "
+            "distribution's setup.py could execute. On an untrusted network, pre-install the SDK from a "
+            "trusted source instead of using auto-install." % (SDK_SPEC, LOCK_FILENAME))
 
     last_detail = "pip install did not complete"
     for extra_args in ([], ["--user"]):
@@ -129,12 +144,12 @@ def install_sdk():
             last_detail = "pip install timed out after %ds" % INSTALL_TIMEOUT_SECONDS
             continue  # try the --user variant before giving up
         except Exception as e:
-            return "could not invoke pip: %s" % e
+            return "could not invoke pip: %s" % e, None
         if result.returncode == 0:
-            return None
+            return None, warn
         tail = (result.stderr or result.stdout or "").strip()
         last_detail = tail[-400:] if len(tail) > 400 else tail
-    return "pip install failed (tried default and --user): %s" % last_detail
+    return "pip install failed (tried default and --user): %s" % last_detail, None
 
 
 def trust_store_label():
@@ -198,8 +213,8 @@ def run_checks(sdk_mod, sdk_errors):
     # NullLogger is required here, not just CAMUNDA_SDK_LOG_LEVEL=silent —
     # the SDK's own debug logger prints an unmasked "OAuth token request:
     # ... client_id=<value>" line to stderr on every authenticated call, and
-    # setting CAMUNDA_SDK_LOG_LEVEL=silent does NOT suppress it (a real gap
-    # in the SDK, worth reporting upstream). Only passing
+    # setting CAMUNDA_SDK_LOG_LEVEL=silent does NOT suppress it (that setting
+    # does not cover this path). Only passing
     # logger=NullLogger() explicitly stops it.
     # Redaction requires this: never let a client ID reach stderr in the
     # clear, even though it isn't the client SECRET.
@@ -279,12 +294,19 @@ def main():
                 "(or pass --install) to install it automatically next run: %s" % (SDK_SPEC, import_err))))
             return 0
 
-        install_err = install_sdk()
+        install_err, install_warn = install_sdk()
         if install_err:
             print(__import__("json").dumps(fragment(
                 "sdk", "SKIP", "OK",
                 "auto-install of the Camunda Python SDK failed — %s. Install manually: pip install \"%s\"" % (install_err, SDK_SPEC))))
             return 0
+
+        # Emit before the re-import: the install already happened, so the fact
+        # that it was not hash-verified belongs in the result file regardless
+        # of what the import does next.
+        if install_warn:
+            print(__import__("json").dumps(install_warn))
+            sys.stdout.flush()
 
         sdk_mod, sdk_errors, import_err = try_import_sdk()
         if sdk_mod is None:

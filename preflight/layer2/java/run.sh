@@ -24,10 +24,10 @@ OUT="$DIR/out"
 # exactly the confusion pinning exists to remove. So an unusable pin fails loudly
 # and names the path it tried.
 #
-# Unset behaves exactly as before: plain PATH lookup. Deliberately NOT consulting
+# Unset means a plain PATH lookup. Deliberately NOT consulting
 # an ambient JAVA_HOME -- the launcher already detects a JAVA_HOME-vs-PATH
-# mismatch and warns about it, so honoring it here would duplicate that logic and
-# silently change long-standing behavior.
+# mismatch and warns about it, so honoring it here would duplicate that logic
+# and silently override the runtime the launcher reported.
 if [ -n "${CAMUNDA_JAVA_HOME:-}" ]; then
   JAVAC="$CAMUNDA_JAVA_HOME/bin/javac"
   JAVA="$CAMUNDA_JAVA_HOME/bin/java"
