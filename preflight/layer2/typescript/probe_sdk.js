@@ -43,17 +43,18 @@
  * equivalent guarantee) -- npm's lockfile-and-integrity mechanism is
  * standard, not a bolt-on.
  *
- * Auto-install (off by default -- same reasoning as Python's pip auto-install
- * and Java's Maven fetch: a corporate-proxy/no-internet environment is
- * exactly the case this whole tool exists to catch, and silently spending
- * time on `npm ci` during every automated preflight run would be bad UX in
- * precisely that scenario):
- *   CAMUNDA_SDK_AUTO_INSTALL=1   or   --install   runs `npm ci` in this
- *   directory (using the committed lockfile) if the SDK isn't already
- *   resolvable, then proceeds. If installation isn't enabled/fails, this
- *   emits a SKIP fragment with the manual install command -- the native
- *   probe's fragments (from probe.js) still cover the mandatory trust check
- *   either way.
+ * Auto-install (ON by default -- same as Python's pip install and Java's Maven
+ * fetch: this tier answers "can the real SDK reach the cluster", and a tier
+ * that silently SKIPs answers nothing; a SKIP sitting among PASS lines reads
+ * as "fine" to a participant scanning the output. The cost is an `npm ci` on
+ * first run, which on a blocked network fails fast and is itself diagnostic):
+ *   `npm ci` runs in this directory (using the committed lockfile) if the SDK
+ *   isn't already resolvable, then this proceeds. --no-install, or
+ *   CAMUNDA_SDK_AUTO_INSTALL=0, opts out for a machine where writing into
+ *   node_modules is unwanted; the Go binary spells the same thing
+ *   --no-sdk-install. If installation is disabled or fails, this emits a SKIP
+ *   fragment with the manual install command -- the native probe's fragments
+ *   (from probe.js) still cover the mandatory trust check either way.
  *
  * ---------------------------------------------------------------------------
  * Trust-store nuance, verified against the SDK's own published source
@@ -126,10 +127,17 @@ const REQUEST_TIMEOUT_MS = 15000;
 const USAGE = `Layer 2 SDK-snippet confirmation -- TypeScript/Node.js.
 Requires ${SDK_NAME}==${SDK_VERSION} -- see run.sh/run.cmd or CAMUNDA_SDK_AUTO_INSTALL.`;
 
+// Installing the pinned SDK is the default; opting out is explicit. A tier that
+// silently SKIPs answers nothing about whether the real client reaches the
+// cluster, which is the question this tier exists to settle -- and a SKIP
+// sitting among PASS lines reads as "fine" to a participant scanning output.
+// --no-install / CAMUNDA_SDK_AUTO_INSTALL=0 opts out when writing into the
+// machine's node_modules is unwanted. --install is still accepted so existing
+// muscle memory keeps working; it is now a no-op.
 function autoInstallEnabled() {
-  if (process.argv.slice(2).includes('--install')) return true;
+  if (process.argv.slice(2).includes('--no-install')) return false;
   const v = (process.env.CAMUNDA_SDK_AUTO_INSTALL || '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
+  return !(v === '0' || v === 'false' || v === 'no' || v === 'off');
 }
 
 function sdkResolvable() {
@@ -403,10 +411,12 @@ async function main() {
             'SKIP',
             'OK',
             SDK_NAME +
-              ' not installed (native trust probe in probe.js already covers the mandatory check) -- install manually: ' +
-              '(cd "' +
+              ' not installed, so the real TypeScript SDK was not exercised (the native trust probe in ' +
+              'probe.js already covers the mandatory check). The automatic install is disabled by ' +
+              '--no-sdk-install, or CAMUNDA_SDK_AUTO_INSTALL=0 -- re-run without it, or install manually: ' +
+              'cd "' +
               __dirname +
-              '" && npm ci), or set CAMUNDA_SDK_AUTO_INSTALL=1 (or pass --install) to install it automatically next run'
+              '" && npm ci'
           )
         )
       );

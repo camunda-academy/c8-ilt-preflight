@@ -362,3 +362,47 @@ func TestParse_RejectsJavaTrustStorePasswordWithoutPath(t *testing.T) {
 		t.Errorf("error should explain the password has nothing to unlock, got: %v", err)
 	}
 }
+
+// TestParse_NoSDKInstall covers the one opt-OUT flag in the set: unlike the
+// opt-in flags, its env form has to be able to turn the fetch off on its own,
+// while an explicit flag still outranks the environment.
+func TestParse_NoSDKInstall(t *testing.T) {
+	base := []string{"--cluster-id", "11111111-2222-3333-4444-555555555555", "--region", "bru-2"}
+
+	cfg, err := Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NoSDKInstall {
+		t.Error("fetching the SDK must be the default, so NoSDKInstall should be false when nothing asks otherwise")
+	}
+
+	cfg, err = Parse(append([]string{"--no-sdk-install"}, base...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.NoSDKInstall {
+		t.Error("--no-sdk-install did not opt out")
+	}
+
+	for _, off := range []string{"0", "false", "FALSE", "no", "off"} {
+		t.Setenv("CAMUNDA_SDK_AUTO_INSTALL", off)
+		cfg, err = Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.NoSDKInstall {
+			t.Errorf("CAMUNDA_SDK_AUTO_INSTALL=%q should opt out", off)
+		}
+	}
+
+	// A truthy env value leaves the default alone rather than inverting it.
+	t.Setenv("CAMUNDA_SDK_AUTO_INSTALL", "1")
+	cfg, err = Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NoSDKInstall {
+		t.Error("CAMUNDA_SDK_AUTO_INSTALL=1 should keep the fetch enabled")
+	}
+}

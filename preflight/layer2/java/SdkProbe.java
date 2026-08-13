@@ -14,11 +14,9 @@ import java.net.URI;
  * Layer 2 SDK-snippet confirmation -- Java.
  *
  * Standalone (requires the real SDK on the classpath -- see run.sh/run.cmd,
- * which resolve it via a scratch Maven project; requires Maven on PATH and
- * CAMUNDA_SDK_AUTO_INSTALL=1 / --install, opt-in for the same reason as the
- * Python probe's pip auto-install -- an automated preflight run on a broken
- * network shouldn't silently spend time fetching a dependency in exactly the
- * scenario it exists to catch):
+ * which resolve it via a scratch Maven project by default, so this needs Maven
+ * on PATH. --no-install, or CAMUNDA_SDK_AUTO_INSTALL=0, opts out of the fetch
+ * and makes this tier report SKIP instead):
  *
  *   javac -encoding UTF-8 -cp &lt;resolved classpath&gt; SdkProbe.java Shared.java
  *   java -Dstdout.encoding=UTF-8 -cp out:&lt;resolved classpath&gt; SdkProbe

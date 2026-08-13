@@ -486,6 +486,13 @@ type ProbeConfig struct {
 	MavenSettings    string
 	MavenCentralOnly bool
 
+	// NoSDKInstall forwards --no-sdk-install as CAMUNDA_SDK_AUTO_INSTALL=0.
+	// The value is always sent explicitly, never left to whatever the ambient
+	// environment happens to hold, so the flag the participant passed is the
+	// one that decides -- a stale CAMUNDA_SDK_AUTO_INSTALL exported in their
+	// shell must not silently override it.
+	NoSDKInstall bool
+
 	// TSProxySupport forwards --ts-proxy-support to CAMUNDA_TS_PROXY_SUPPORT.
 	// Only probe_sdk.js (TypeScript tier 2) reads this -- opt-in because it
 	// swaps the real SDK's own (proxy-blind) fetch for a hand-written
@@ -643,6 +650,14 @@ func probeEnv(pc ProbeConfig) []string {
 	}
 	if pc.MavenDepcheck {
 		overrides["CAMUNDA_MAVEN_DEPCHECK"] = "1"
+	}
+	// Always set, both ways round: the tier-2 SDK fetch is on by default, so
+	// "unset" would leave the decision to the probe's own default and to any
+	// value already in the participant's environment.
+	if pc.NoSDKInstall {
+		overrides["CAMUNDA_SDK_AUTO_INSTALL"] = "0"
+	} else {
+		overrides["CAMUNDA_SDK_AUTO_INSTALL"] = "1"
 	}
 	if pc.MavenCentralOnly {
 		overrides["CAMUNDA_MAVEN_CENTRAL_ONLY"] = "1"

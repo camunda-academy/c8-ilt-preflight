@@ -12,16 +12,18 @@ The SDK reads its config from the SAME env vars the Go binary and probe.py
 use: CAMUNDA_REST_ADDRESS/CAMUNDA_REGION, CAMUNDA_CLIENT_ID/SECRET,
 CAMUNDA_MTLS_CA_PATH. No extra wiring needed.
 
-Auto-install (off by default — a corporate-proxy/no-internet environment is
-exactly the case this whole tool exists to catch, and silently spending 60s+
-on a pip install during every automated preflight run would be bad UX in
-precisely that scenario):
-  CAMUNDA_SDK_AUTO_INSTALL=1   or   --install   installs the pinned SDK
-  version (camunda-orchestration-sdk >=9,<10) if it isn't already present,
-  then proceeds. If installation
-  isn't enabled/fails, this emits a SKIP fragment with the manual install
-  command — the native probe's fragments (from probe.py) still cover the
-  mandatory trust check either way.
+Auto-install (ON by default — this tier answers "can the real SDK reach the
+cluster", and a tier that silently SKIPs answers nothing; a SKIP sitting among
+PASS lines reads as "fine" to a participant scanning the output. The cost is a
+pip install on first run, which on a blocked network fails fast and is itself
+diagnostic):
+  the pinned SDK version (camunda-orchestration-sdk >=9,<10) is installed if it
+  isn't already present, then this proceeds. --no-install, or
+  CAMUNDA_SDK_AUTO_INSTALL=0, opts out for a machine where writing into
+  site-packages is unwanted; the Go binary spells the same thing
+  --no-sdk-install. If installation is disabled or fails, this emits a SKIP
+  fragment with the manual install command — the native probe's fragments (from
+  probe.py) still cover the mandatory trust check either way.
 
 Trust-store nuance verified against the SDK's own source (not assumed):
 httpx (the SDK's HTTP client) defaults verify=True, which internally builds
@@ -65,11 +67,25 @@ INSTALL_TIMEOUT_SECONDS = 90
 
 
 def auto_install_enabled():
+    """Installing the pinned SDK is the default; opting out is explicit.
+
+    A tier that silently SKIPs answers nothing about whether the real client
+    reaches the cluster, which is the question this tier exists to settle -- and
+    a SKIP sitting among PASS lines reads as "fine" to a participant scanning
+    the output. --no-install / CAMUNDA_SDK_AUTO_INSTALL=0 opts out when writing
+    into the machine's site-packages is unwanted. --install is still accepted so
+    existing muscle memory keeps working; it is now a no-op.
+    """
     import os
 
-    if "--install" in sys.argv[1:]:
-        return True
-    return os.environ.get("CAMUNDA_SDK_AUTO_INSTALL", "").strip().lower() in ("1", "true", "yes")
+    if "--no-install" in sys.argv[1:]:
+        return False
+    return os.environ.get("CAMUNDA_SDK_AUTO_INSTALL", "").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
 
 
 def try_import_sdk():
@@ -289,9 +305,10 @@ def main():
         if not auto_install_enabled():
             print(__import__("json").dumps(fragment(
                 "sdk", "SKIP", "OK",
-                "camunda-orchestration-sdk not installed (native trust probe in probe.py already covers the "
-                "mandatory check) — install manually: pip install \"%s\", or set CAMUNDA_SDK_AUTO_INSTALL=1 "
-                "(or pass --install) to install it automatically next run: %s" % (SDK_SPEC, import_err))))
+                "camunda-orchestration-sdk not installed, so the real Python SDK was not exercised "
+                "(the native trust probe in probe.py already covers the mandatory check). The automatic "
+                "install is disabled by --no-sdk-install (or CAMUNDA_SDK_AUTO_INSTALL=0) — re-run without "
+                "it, or install manually: pip install \"%s\": %s" % (SDK_SPEC, import_err))))
             return 0
 
         install_err, install_warn = install_sdk()

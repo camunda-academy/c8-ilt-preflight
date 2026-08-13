@@ -250,6 +250,7 @@ func run(argv []string) int {
 		MavenSettings:          cfg.MavenSettings,
 		MavenCentralOnly:       cfg.MavenCentralOnly,
 		TSProxySupport:         cfg.TSProxySupport,
+		NoSDKInstall:           cfg.NoSDKInstall,
 		Runtimes:               runtimeOverrides,
 	}
 	// Print the header BEFORE any probe runs, and stream each fragment the
