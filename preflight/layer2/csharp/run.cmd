@@ -23,7 +23,11 @@ rem --dotnet-bin) pins a specific installation; a pin that doesn't work is a har
 rem error rather than a fall back to PATH, because checking a different
 rem installation than the one that was asked for -- and reporting it as if it
 rem were the same -- is the confusion the pin exists to remove.
-set "DOTNET=%CAMUNDA_DOTNET_BIN%"
+rem !VAR! (delayed), never %VAR% (immediate): immediate expansion happens before
+rem cmd tokenizes metacharacters, so a value containing " or & would be parsed
+rem as command syntax rather than as data. Delayed expansion substitutes after
+rem tokenization and is inert.
+set "DOTNET=!CAMUNDA_DOTNET_BIN!"
 set "DOTNET_PINNED=1"
 if not defined DOTNET (
   set "DOTNET=dotnet"
@@ -47,7 +51,7 @@ for /f "delims=. tokens=1" %%v in ('"%DOTNET%" --version 2^>nul') do if not defi
 
 if not defined SDK_MAJOR (
   if "!DOTNET_PINNED!"=="1" (
-    echo the .NET SDK selected explicitly ^(%CAMUNDA_DOTNET_BIN%^) is missing or does not report a version; not falling back to PATH, because that would check a different installation than the one requested 1>&2
+    echo the .NET SDK selected explicitly ^(!CAMUNDA_DOTNET_BIN!^) is missing or does not report a version; not falling back to PATH, because that would check a different installation than the one requested 1>&2
   ) else (
     echo dotnet not found on PATH -- the .NET SDK is required ^(8.0+^) 1>&2
   )
@@ -78,11 +82,19 @@ rem reasoning as every other language's auto-install). ---
 set "SDK_ASSETS=%DIR%SdkProbe\obj\project.assets.json"
 
 set AUTO_INSTALL=0
-if "%CAMUNDA_SDK_AUTO_INSTALL%"=="1" set AUTO_INSTALL=1
-if "%CAMUNDA_SDK_AUTO_INSTALL%"=="true" set AUTO_INSTALL=1
-for %%A in (%*) do (
-  if "%%A"=="--install" set AUTO_INSTALL=1
-)
+if "!CAMUNDA_SDK_AUTO_INSTALL!"=="1" set AUTO_INSTALL=1
+if "!CAMUNDA_SDK_AUTO_INSTALL!"=="true" set AUTO_INSTALL=1
+rem A shift-scan over %1, not `for %%A in (%*)`: an unquoted %* in a for-set is
+rem expanded before tokenization, so an argument containing & or | would run as
+rem a command, and it glob-expands against the working directory. %~1 strips
+rem surrounding quotes and never re-parses. `shift` does not affect %*, which is
+rem still forwarded intact to the probes below.
+:scanArgs
+if "%~1"=="" goto :scanArgsDone
+if "%~1"=="--install" set AUTO_INSTALL=1
+shift
+goto :scanArgs
+:scanArgsDone
 
 set RESTORE_FAILED=0
 if not exist "%SDK_ASSETS%" if "%AUTO_INSTALL%"=="1" if !SDK_MAJOR! GEQ 8 (

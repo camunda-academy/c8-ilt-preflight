@@ -11,6 +11,7 @@ import java.security.cert.CertificateFactory;
 import java.util.Base64;
 import java.util.Collection;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
@@ -248,6 +249,16 @@ public final class Probe {
     try (Socket socket = rawSocket) {
       SSLSocketFactory factory = trust.sslContext.getSocketFactory();
       try (SSLSocket tlsSocket = (SSLSocket) factory.createSocket(socket, host, port, true)) {
+        // A raw SSLSocket validates the certificate CHAIN but performs no
+        // endpoint identification -- it will happily complete a handshake with
+        // a validly-signed certificate issued for an entirely different host
+        // unless this is set. The real Camunda client (Apache HttpClient 5)
+        // does check the hostname, so without this the probe would report PASS
+        // on a connection the actual training code rejects: the precise
+        // false-green this probe exists to rule out.
+        SSLParameters params = tlsSocket.getSSLParameters();
+        params.setEndpointIdentificationAlgorithm("HTTPS");
+        tlsSocket.setSSLParameters(params);
         tlsSocket.startHandshake();
         long elapsedMs = System.currentTimeMillis() - start;
         return Shared.fragment(
@@ -294,7 +305,16 @@ public final class Probe {
     socket.connect(new InetSocketAddress(proxyHost, proxyPort), CONNECT_TIMEOUT_MS);
     if ("https".equals(proxy.getScheme())) {
       SSLSocketFactory f = (SSLSocketFactory) SSLSocketFactory.getDefault();
-      socket = f.createSocket(socket, proxyHost, proxyPort, true);
+      SSLSocket tlsProxy = (SSLSocket) f.createSocket(socket, proxyHost, proxyPort, true);
+      // Verify the PROXY's own certificate names it, for the same reason the
+      // target handshake does -- and more urgently here, because the
+      // Proxy-Authorization credentials below are written onto this stream
+      // before any target verification happens.
+      SSLParameters proxyParams = tlsProxy.getSSLParameters();
+      proxyParams.setEndpointIdentificationAlgorithm("HTTPS");
+      tlsProxy.setSSLParameters(proxyParams);
+      tlsProxy.startHandshake();
+      socket = tlsProxy;
     }
 
     StringBuilder req = new StringBuilder();
