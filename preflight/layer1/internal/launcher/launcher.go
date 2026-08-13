@@ -588,7 +588,7 @@ func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelecti
 			// working directory get executed instead.
 			emit(model.ProbeFragment{
 				Runtime: stack, Verdict: model.VerdictSkip, ErrorClass: model.ErrOK,
-				Detail: fmt.Sprintf("runtime present (%s), but the layer2 probe directory was not found next to the executable — ship layer2/ alongside the binary, or set CAMUNDA_LAYER2_DIR", redact.MaskHomeDir(status.BinaryFound)),
+				Detail: fmt.Sprintf("runtime present (%s), but the layer2 folder is not next to the program — run the program from the folder you unzipped, with layer2 beside it (or set CAMUNDA_LAYER2_DIR to that layer2 folder)", redact.MaskHomeDir(status.BinaryFound)),
 			})
 			continue
 		}
