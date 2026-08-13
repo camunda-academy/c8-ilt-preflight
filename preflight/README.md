@@ -5,7 +5,7 @@ your machine can reach the Camunda 8 cluster used for the training exercises.
 Run it once, fix anything it flags to ensure training readiness.
 
 - No installation, no admin rights required.
-- A single file per operating system — nothing else to download.
+- One download per operating system: unzip it and run the program inside.
 - **This check by default never needs any cluster data or login credentials.** It only confirms
   *network connectivity*, not your credentials.
 - Nothing is sent anywhere automatically. The tool only talks to Camunda's
@@ -14,16 +14,22 @@ Run it once, fix anything it flags to ensure training readiness.
 
 ---
 
-## 1. Download
+## 1. Download and unzip
 
-Download the file for your operating system:
+Download the archive for your operating system:
 
-| Operating system | File |
-|---|---|
-| Windows | preflight-windows-amd64.exe |
-| macOS (Intel) | preflight-darwin-amd64 |
-| macOS (Apple Silicon) | preflight-darwin-arm64 |
-| Linux | preflight-linux-amd64 |
+| Operating system | Archive | Program inside |
+|---|---|---|
+| Windows | preflight-windows-amd64.zip | preflight-windows-amd64.exe |
+| macOS (Intel) | preflight-darwin-amd64.zip | preflight-darwin-amd64 |
+| macOS (Apple Silicon) | preflight-darwin-arm64.zip | preflight-darwin-arm64 |
+| Linux | preflight-linux-amd64.zip | preflight-linux-amd64 |
+
+Unzip it. You get one folder containing the program, this README, and a
+`layer2` folder. **Keep them together** — the program looks for `layer2`
+next to itself when it checks your programming-language setup. Moved on its
+own, it still checks network connectivity, but reports the language checks
+as skipped.
 
 The tool isn't code-signed yet, so your operating system will likely warn you
 the first time you run it. This is expected and safe to bypass — see below.
@@ -32,12 +38,12 @@ the first time you run it. This is expected and safe to bypass — see below.
 **Run anyway**.
 
 **macOS — "cannot be opened because the developer cannot be verified":**
-right-click (Control-click) the downloaded file → **Open** → **Open** again
-in the dialog. If that option doesn't appear, run this once in Terminal
-instead:
+right-click (Control-click) the program → **Open** → **Open** again in the
+dialog. If that option doesn't appear, open Terminal in the unzipped folder
+and run this once:
 ```bash
-xattr -d com.apple.quarantine ./preflight-darwin-amd64   # or preflight-darwin-arm64
-chmod +x ./preflight-darwin-amd64
+xattr -dr com.apple.quarantine .
+chmod +x ./preflight-darwin-amd64   # or preflight-darwin-arm64
 ```
 
 **Linux:**
@@ -49,8 +55,8 @@ chmod +x ./preflight-linux-amd64
 
 ## 2. Run the check
 
-Open a terminal (macOS/Linux) or PowerShell (Windows) in the folder where you
-downloaded the file, and run:
+Open a terminal (macOS/Linux) or PowerShell (Windows) **in the unzipped
+folder**, and run:
 
 **Windows (PowerShell):**
 ```powershell
