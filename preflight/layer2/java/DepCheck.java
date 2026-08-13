@@ -1,6 +1,8 @@
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ByteArrayOutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,7 +34,7 @@ import java.util.concurrent.TimeUnit;
  * never by the Central-baseline leg (that's isolation detail, not a pass).
  *
  * Resolve-only (`dependency:go-offline`, full transitive tree), no compile.
- * Maven only for now (Gradle deferred).
+ * Maven only.
  *
  * Env vars (forwarded by the Go launcher from its flags; also settable by hand
  * for a standalone run):
@@ -43,16 +45,18 @@ import java.util.concurrent.TimeUnit;
  *       leg (else the machine's active settings are used).
  *   CAMUNDA_MAVEN_MIRROR         explicit mirror URL -> a mirrorOf=* settings is
  *       generated and used for the customer leg (overrides the active settings).
+ *       Must be an https:// URL: mirrorOf=* also routes Maven's own plugin
+ *       downloads through it, and Maven executes those jars (see
+ *       rejectUnsafeMirror).
  *   CAMUNDA_MAVEN_CENTRAL_ONLY   (1/true/yes) run only the Central baseline.
  *
  * Redaction: a customer settings.xml / mirror URL can carry <server> passwords
  * or user:pass@host. This probe NEVER dumps raw mvn output to stdout -- only a
  * short, classified summary, funneled through Shared.scrubUrlCreds like every
- * other fragment. (v1 deliberately does NOT run `help:effective-settings`, which
- * prints server passwords -- surfacing the effective mirror block safely is a
- * documented v2 follow-up.)
+ * other fragment. Not implemented: surfacing the effective mirror block
+ * (`help:effective-settings` prints server passwords).
  *
- * KNOWN v1 LIMITS (documented follow-ups, not silent gaps):
+ * KNOWN LIMITS:
  *   - Maven discovery covers PATH, MAVEN_HOME/M2_HOME, and a project ./mvnw
  *     wrapper. The IDE-bundled (IntelliJ/JetBrains/NetBeans), package-manager
  *     (SDKMAN/Homebrew/Chocolatey/Scoop), and bundled-wrapper-last-resort
@@ -60,7 +64,7 @@ import java.util.concurrent.TimeUnit;
  *     locations has Maven, the probe SKIPs (with guidance), it does not fail.
  *   - Per-repo x per-artifact granularity is collapsed to per-leg (one
  *     go-offline over all three coords) -- a broken mirror fails the whole leg,
- *     which is the actionable signal; per-artifact attribution is a v2 refinement.
+ *     which is the actionable signal; per-artifact attribution is not implemented.
  */
 public final class DepCheck {
 
@@ -154,9 +158,9 @@ public final class DepCheck {
       // Target strings are kept short and fixed ("training-deps (customer)"/
       // "(baseline)") rather than embedding the variable-length (potentially
       // unbounded -- a mirror URL or settings path) customerLabel, which
-      // used to make this line overflow its column and misalign against
-      // every other Layer 2 line. The label still appears -- in Detail,
-      // which has no column-width constraint.
+      // would overflow the column and misalign against every other Layer 2
+      // line. The label still appears -- in Detail, which has no
+      // column-width constraint.
       if (centralOnly) {
         LegResult central = resolveLeg(mvn, "central", pom, work, centralSettingsArgs(work));
         System.out.println(central.resolved
@@ -169,6 +173,18 @@ public final class DepCheck {
       }
 
       // --- Customer leg (the config their real build uses) ---
+      // An explicit mirror is only usable if it is an https:// URL -- see
+      // rejectUnsafeMirror. A rejected mirror stops the check here rather than
+      // quietly falling back to a different config, which would report a
+      // verdict for something other than what the operator asked to test.
+      if (!mirrorUrl.isEmpty()) {
+        String mirrorRejection = rejectUnsafeMirror(mirrorUrl);
+        if (mirrorRejection != null) {
+          System.out.println(Shared.fragment(
+              "maven-dependency-resolution", "WARN", "CONFIG_ERROR", mirrorRejection));
+          return 0;
+        }
+      }
       List<String> customerSettings = customerSettingsArgs(work, settingsPath, mirrorUrl);
       String customerLabel = mirrorUrl.isEmpty()
           ? (settingsPath.isEmpty() ? "your active Maven settings" : "your Maven settings " + settingsPath)
@@ -265,19 +281,66 @@ public final class DepCheck {
     return list("-s", clean.toString(), "-gs", clean.toString());
   }
 
+  /** Rejects a CAMUNDA_MAVEN_MIRROR value that must not be pointed at.
+   *
+   * <p>Returns null when the value is usable, otherwise the operator-facing
+   * detail explaining why it was not used.
+   *
+   * <p>The generated settings use mirrorOf=*, which routes ALL Maven traffic
+   * through the given URL -- including Maven's own build plugins
+   * (maven-dependency-plugin and its dependencies), which Maven then executes.
+   * Each leg also uses a throwaway -Dmaven.repo.local, so nothing is cached and
+   * every run re-downloads those plugin jars. Over plaintext http:// that is
+   * executable code fetched on an unprotected connection, on exactly the kind
+   * of network this tool is run on when something is wrong with it: anyone on
+   * the path can substitute a modified jar. The value is also written verbatim
+   * into a generated settings.xml, so a value that isn't a URL at all is
+   * rejected rather than interpolated. */
+  private static String rejectUnsafeMirror(String mirrorUrl) {
+    URI u;
+    try {
+      u = new URI(mirrorUrl);
+    } catch (URISyntaxException e) {
+      return "the Maven mirror URL (--maven-mirror / CAMUNDA_MAVEN_MIRROR) is not a valid URL, so it was "
+          + "NOT used and the mirror check did not run: " + mirrorUrl + " -- check for stray spaces, "
+          + "quotes or backslashes, then re-run with the mirror's full https:// URL.";
+    }
+    String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase(Locale.ROOT);
+    if (scheme.equals("https")) {
+      if (u.getHost() == null || u.getHost().isEmpty()) {
+        return "the Maven mirror URL (--maven-mirror / CAMUNDA_MAVEN_MIRROR) has no host, so it was NOT "
+            + "used and the mirror check did not run: " + mirrorUrl + " -- re-run with the mirror's full "
+            + "https:// URL, for example https://nexus.example.com/repository/maven-public/.";
+      }
+      return null;
+    }
+    if (scheme.equals("http")) {
+      return "the Maven mirror URL (--maven-mirror / CAMUNDA_MAVEN_MIRROR) is a plaintext http:// URL, so "
+          + "it was NOT used and the mirror check did not run: " + mirrorUrl + " -- testing a mirror "
+          + "points Maven at it for EVERYTHING, including Maven's own build plugins, which Maven "
+          + "downloads and then EXECUTES on this machine. Over http:// that download is unprotected and "
+          + "anyone on the network path can replace it with modified code. Re-run with the mirror's "
+          + "https:// URL. If the mirror only serves http, run --maven-settings <your settings.xml> "
+          + "instead (it resolves through whatever your real build uses, without this tool pointing "
+          + "every request at one plaintext host), or --maven-central-only for the Maven Central "
+          + "baseline alone.";
+    }
+    return "the Maven mirror URL (--maven-mirror / CAMUNDA_MAVEN_MIRROR) is not an https:// URL, so it "
+        + "was NOT used and the mirror check did not run: " + mirrorUrl + " -- re-run with the mirror's "
+        + "full URL including the https:// scheme, for example "
+        + "https://nexus.example.com/repository/maven-public/.";
+  }
+
   private static List<String> customerSettingsArgs(Path work, String settingsPath, String mirrorUrl)
       throws IOException {
     if (!mirrorUrl.isEmpty()) {
       // Explicit mirror override: generate a mirrorOf=* settings pointing at it,
       // and force a clean global settings so only this mirror applies.
+      // Callers reach here only for a mirror rejectUnsafeMirror() accepted.
       Path clean = work.resolve("clean-global.xml");
       Files.write(clean, ("<settings><mirrors></mirrors></settings>").getBytes(StandardCharsets.UTF_8));
       Path m = work.resolve("mirror-settings.xml");
-      String xml = "<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\"><mirrors><mirror>"
-          + "<id>c8-explicit-mirror</id><name>c8-explicit</name>"
-          + "<url>" + xmlEscape(mirrorUrl) + "</url><mirrorOf>*</mirrorOf>"
-          + "</mirror></mirrors></settings>";
-      Files.write(m, xml.getBytes(StandardCharsets.UTF_8));
+      Files.write(m, mirrorSettingsXml(mirrorUrl).getBytes(StandardCharsets.UTF_8));
       return list("-s", m.toString(), "-gs", clean.toString());
     }
     if (!settingsPath.isEmpty()) {
@@ -308,7 +371,7 @@ public final class DepCheck {
     return central ? "MAVEN_CENTRAL_UNREACHABLE" : "MAVEN_MIRROR_UNREACHABLE";
   }
 
-  // ---- Maven discovery (v1: PATH, MAVEN_HOME/M2_HOME, project ./mvnw) ----
+  // ---- Maven discovery (PATH, MAVEN_HOME/M2_HOME, project ./mvnw) ----
 
   private static String findMvn() {
     boolean win = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
@@ -429,6 +492,49 @@ public final class DepCheck {
     sb.append("  </dependencies>\n");
     sb.append("</project>\n");
     return sb.toString();
+  }
+
+  /** Settings for the explicit-mirror leg: a mirrorOf=* mirror at the given URL,
+   * plus a repository/pluginRepository pair carrying
+   * <code>&lt;checksumPolicy&gt;fail&lt;/checksumPolicy&gt;</code>.
+   *
+   * <p>checksumPolicy is a repository property, not a mirror property, so it has
+   * to be attached to repository definitions: `central` is redefined here (for
+   * both regular artifacts and plugins) with the strict policy, and the
+   * mirrorOf=* mirror then serves it. Maven's default policy is `warn`, which
+   * downloads and uses an artifact whose checksum does not match and only
+   * prints a warning; `fail` makes the build stop instead. The URL is escaped
+   * for XML by xmlEscape -- a mirror URL can legitimately contain `&amp;`. */
+  private static String mirrorSettingsXml(String mirrorUrl) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\">");
+    sb.append("<mirrors><mirror>");
+    sb.append("<id>c8-explicit-mirror</id><name>c8-explicit</name>");
+    sb.append("<url>").append(xmlEscape(mirrorUrl)).append("</url><mirrorOf>*</mirrorOf>");
+    sb.append("</mirror></mirrors>");
+    sb.append("<profiles><profile><id>c8-strict-checksums</id>");
+    sb.append("<repositories>");
+    sb.append(strictRepoBody("repository"));
+    sb.append("</repositories>");
+    sb.append("<pluginRepositories>");
+    sb.append(strictRepoBody("pluginRepository"));
+    sb.append("</pluginRepositories>");
+    sb.append("</profile></profiles>");
+    sb.append("<activeProfiles><activeProfile>c8-strict-checksums</activeProfile></activeProfiles>");
+    sb.append("</settings>");
+    return sb.toString();
+  }
+
+  /** One `central` (plugin)repository definition with strict checksums. The URL
+   * is Central's, but every request is redirected by the mirrorOf=* mirror
+   * above -- the definition exists to carry the checksum policy. */
+  private static String strictRepoBody(String element) {
+    return "<" + element + ">"
+        + "<id>central</id><name>c8-depcheck-central</name>"
+        + "<releases><enabled>true</enabled><checksumPolicy>fail</checksumPolicy></releases>"
+        + "<snapshots><enabled>false</enabled><checksumPolicy>fail</checksumPolicy></snapshots>"
+        + "<url>https://repo.maven.apache.org/maven2</url>"
+        + "</" + element + ">";
   }
 
   private static String xmlEscape(String s) {

@@ -67,5 +67,5 @@ Thumbs.db
 .idea/
 *.iml
 
-# Claude Code local session/tool config — never committed
+# Local editor/agent session config — never committed
 .claude/

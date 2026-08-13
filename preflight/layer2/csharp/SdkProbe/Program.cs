@@ -11,24 +11,21 @@
 // catching proxy-handling/config issues the raw probe can't.
 //
 // ---------------------------------------------------------------------------
-// Package/version - see SdkProbe.csproj's own comment for the full verified
-// finding (Camunda.Orchestration.Sdk, exact-pinned 9.1.3, corrected from an
-// initial "9.*" range guess; a 10.0.0 stable exists on NuGet but is
-// unlisted).
+// Package/version - see SdkProbe.csproj's own comment for the details
+// (Camunda.Orchestration.Sdk, exact-pinned 9.1.3; a 10.0.0 stable exists on
+// NuGet but is unlisted).
 //
-// Client construction / methods - verified against the real SDK's source at
-// git tag v9.1.3 (CamundaClient.cs, Generated/CamundaClient.Generated.cs), NOT
-// trusted from the original literal guess until confirmed:
-//   - CamundaClient.Create(CamundaOptions?) matches the original guess exactly.
-//   - GetTopologyAsync() also matches the original guess exactly - returns
-//     TopologyResponse with a Brokers list, matching this tool's convention.
-//   - GetStatusAsync() (the network-mode analog, NOT part of the original
-//     guess, which only covered GetTopologyAsync) - a Task with no return
+// Client construction / methods, verified against the real SDK's source at
+// git tag v9.1.3 (CamundaClient.cs, Generated/CamundaClient.Generated.cs):
+//   - CamundaClient.Create(CamundaOptions?) constructs the client.
+//   - GetTopologyAsync() returns TopologyResponse with a Brokers list,
+//     matching this tool's convention.
+//   - GetStatusAsync() (the network-mode analog) - a Task with no return
 //     value; throws HttpSdkException with a real HTTP status for any non-2xx
 //     response, including 503 (cluster unhealthy) and a stray 404 (edge/no
 //     route). No response body is required (204 -> success).
 //
-// Env vars - verified against ConfigurationHydrator.cs source, not assumed:
+// Env vars - verified against ConfigurationHydrator.cs source:
 //   CAMUNDA_REST_ADDRESS      SDK auto-appends /v2 if missing - but does NOT
 //       do UUID extraction or stray-segment stripping, so it has the SAME
 //       Console copy-paste ":443" gap already confirmed for the Python/Java/
@@ -57,7 +54,7 @@
 //       mismatch WARN), there is no name trap for C# either.
 //
 // Trust-store nuance for this tier - see Shared.cs's TrustContext doc comment
-// for the full verified finding: the real SDK's TlsHelper.BuildHandler
+// for the full details: the real SDK's TlsHelper.BuildHandler
 // produces functionally APPEND semantics (OS store OR custom CA), the
 // OPPOSITE of Java's/TypeScript's true replace-the-whole-store behavior.
 // Because AuthHandler.SendAsync explicitly builds its OAuth token-fetch
@@ -65,7 +62,7 @@
 // client (verified in AuthHandler.cs source), there is NO separate
 // un-wired-trust-config gap for the OAuth call the way there is in Java's raw
 // SDK (where the OAuth client's trust store is a completely separate,
-// unwired config surface) - a genuine positive finding, not assumed.
+// unwired config surface) - a positive difference.
 //
 // A missing/unreadable CAMUNDA_MTLS_CA_PATH file throws a loud
 // FileNotFoundException at CamundaClient.Create() time (TlsHelper.ReadPath) -
@@ -83,7 +80,7 @@
 // from Node (whose fetch ignores these vars entirely) and Java (which needs
 // JVM system properties, not env vars).
 //
-// Logging / stdout-contamination finding, verified against
+// Logging / stdout-contamination behavior, verified against
 // SdkConsoleLoggerFactory.cs + CamundaConfig.cs source, NOT a credential leak
 // like Python's/TypeScript's client_id-at-debug-level gap, but a DIFFERENT and
 // arguably more disruptive risk for THIS project specifically: when no custom
@@ -97,8 +94,8 @@
 // parsing, which requires exactly one JSON object on stdout and nothing
 // else. No client_id/secret is logged anywhere in the paths exercised by
 // this probe (CamundaClient's own debug line only logs the auth STRATEGY name,
-// and OAuthManager's logs never include client_id) - a genuine, verified
-// ABSENCE of the Python/TypeScript-style credential leak. Fixed defensively
+// and OAuthManager's logs never include client_id) - an ABSENCE of the
+// Python/TypeScript-style credential leak. Fixed defensively
 // here (belt-and-suspenders) by ALWAYS passing LoggerFactory =
 // NullLoggerFactory.Instance, regardless of CAMUNDA_SDK_LOG_LEVEL, so the
 // stdout contract can never be put at risk by an operator's own log-level
@@ -169,7 +166,7 @@ async Task<int> RunAsync(string[] a)
     {
         // Force credential-free even if CAMUNDA_CLIENT_ID/SECRET happen to be
         // present -- see the module doc comment's "auth-strategy auto-upgrade"
-        // finding, verified in ConfigurationHydrator.Hydrate source.
+        // note, verified in ConfigurationHydrator.Hydrate source.
         config["CAMUNDA_AUTH_STRATEGY"] = "NONE";
     }
 
@@ -180,7 +177,7 @@ async Task<int> RunAsync(string[] a)
         {
             Config = config,
             // REQUIRED, not optional -- see the module doc comment's "stdout
-            // contamination" finding. Forcing NullLoggerFactory here means the
+            // contamination" note. Forcing NullLoggerFactory here means the
             // SDK's own console logger (which would otherwise write
             // Trace/Debug/Information/Warning lines to stdout) can never fire,
             // regardless of what CAMUNDA_SDK_LOG_LEVEL the environment sets.
@@ -193,7 +190,7 @@ async Task<int> RunAsync(string[] a)
         // file throws FileNotFoundException (TlsHelper.ReadPath); invalid
         // config (e.g. BASIC without a username) throws
         // CamundaConfigurationException. Both are configuration mistakes, not
-        // network/trust findings -- surface as a CONFIG_ERROR WARN rather than
+        // network/trust failures -- surface as a CONFIG_ERROR WARN rather than
         // a raw probe-error/crash fragment.
         Console.WriteLine(Shared.EmitFragment(
             restBase.Host + " (config)",

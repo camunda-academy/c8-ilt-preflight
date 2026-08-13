@@ -331,10 +331,9 @@ func pinMismatchWarning(st RuntimeStatus) (model.ProbeFragment, bool) {
 // build that the tool didn't put there.
 //
 // `dotnet` resolves global.json from the CURRENT WORKING DIRECTORY upward, not
-// from the project's location (verified: the same build succeeds from outside
-// such a tree and fails with "A compatible .NET SDK was not found" from inside
-// it). So a participant who unpacks this tool inside a checked-out repo or
-// solution folder and runs it there silently hands their SDK pin to our build.
+// from the project's location. So a participant who unpacks this tool inside a
+// checked-out repo or solution folder and runs it there silently hands their
+// SDK pin to our build.
 // If it names an SDK they don't have, the probe dies during build for a reason
 // that has nothing to do with connectivity — so name the file rather than let it
 // surface as an opaque build failure.
@@ -598,7 +597,7 @@ func Run(ctx context.Context, layer2Dir string, stacks []string, explicitSelecti
 			// A runtime can be present on PATH with no probe shipped for it
 			// yet (e.g. a stack added to KnownStacks ahead of its probe).
 			// Kept short and plain-language deliberately -- this ends up in
-			// the customer-facing result, not an internal roadmap note.
+			// the participant-facing result.
 			emit(model.ProbeFragment{
 				Runtime:             stack,
 				TrustStoreExercised: "",
@@ -691,6 +690,20 @@ func probeEnv(pc ProbeConfig) []string {
 		"CAMUNDA_CLIENT_SECRET", "CAMUNDA_CLIENT_ID",
 		"CAMUNDA_CLIENT_AUTH_CLIENTSECRET", "CAMUNDA_CLIENT_AUTH_CLIENTID",
 		"CAMUNDA_BASIC_AUTH_PASSWORD", "CAMUNDA_BASIC_AUTH_USERNAME",
+		// The 8.8+ spelling of the basic-auth pair. The CAMUNDA_BASIC_AUTH_*
+		// names above are the older form; both are in circulation, so both have
+		// to go.
+		"CAMUNDA_CLIENT_AUTH_PASSWORD", "CAMUNDA_CLIENT_AUTH_USERNAME",
+		// The ZEEBE_* names predate the CAMUNDA_* convention and are still what
+		// the older SaaS credentials download hands out, so a participant can
+		// easily have them exported without ever having typed them. Missing
+		// these was the gap that mattered: this list is the only thing between
+		// an inherited secret and a child process, and a value the tool never
+		// saw as a flag is also a value its redaction layer cannot recognize if
+		// a probe were to echo it back.
+		"ZEEBE_CLIENT_SECRET", "ZEEBE_CLIENT_ID",
+		"ZEEBE_AUTHORIZATION_SERVER_URL", "ZEEBE_TOKEN_AUDIENCE",
+		"CAMUNDA_CONSOLE_CLIENT_SECRET", "CAMUNDA_CONSOLE_CLIENT_ID",
 	}
 	stripCreds := strings.ToLower(pc.Mode) != "full"
 
@@ -753,10 +766,8 @@ const (
 // producing any result, so it's deliberately generous rather than kept short
 // like other truncated fields (an OAuth error_description, say): a build
 // tool's error output is genuinely long, and the useful part is often past
-// the first few hundred characters -- confirmed from a real field case where
-// a 300-char cap cut a NuGet failure off mid-path, one line before the
-// project file it named. Still bounded, so a looping/runaway build can't
-// balloon the result file.
+// the first few hundred characters. Still bounded, so a looping/runaway
+// build can't balloon the result file.
 const stderrTruncateLimit = 4000
 
 // invokeProbes runs one probe's standalone entrypoint and streams its stdout

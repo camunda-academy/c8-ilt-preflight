@@ -34,15 +34,14 @@ func TestClassifyDialError_CrossPlatformRefused(t *testing.T) {
 }
 
 // TestClassifyDialError_WindowsFirewallAccessDenied is a regression test for
-// a third distinct OS wording: a `New-NetFirewallRule -Action Block` test
-// shows Windows Firewall's own local block produces WSAEACCES ("...forbidden
-// by its access permissions"), which is different from both "connection
-// refused" and "...actively refused it."
+// a third distinct OS wording: a Windows Firewall local block produces
+// WSAEACCES ("...forbidden by its access permissions"), which is different
+// from both "connection refused" and "...actively refused it."
 // (that's a remote-side reject; this is a local OS-level block). Without
 // this match it silently fell through to the generic default branch, same
 // failure mode as the other two wordings.
 func TestClassifyDialError_WindowsFirewallAccessDenied(t *testing.T) {
-	err := errors.New(`dial tcp 104.18.11.55:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.`)
+	err := errors.New(`dial tcp 198.51.100.10:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.`)
 	code, detail := classifyDialError(err)
 	if code != "CONNECT_REFUSED" {
 		t.Errorf("code = %q, want CONNECT_REFUSED", code)

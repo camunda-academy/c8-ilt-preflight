@@ -494,12 +494,12 @@ final class Shared {
     // Text-matched (not instanceof) deliberately -- Shared.java is compiled
     // for the native probe too, which has NO Apache HttpClient5 on its
     // classpath (zero-dependency by design), so it can't reference
-    // org.apache.hc.core5.http.ConnectionClosedException directly. Found
-    // live: this was previously falling through to the generic
-    // CONNECT_REFUSED fallback below, wrongly implying a firewall block for
-    // a connection that was actually established -- a real cause seen in
-    // this project was a config-side trust-store gap breaking the OAuth
-    // token fetch mid-request, not a network block at all.
+    // org.apache.hc.core5.http.ConnectionClosedException directly. Without
+    // this match the case falls through to the generic CONNECT_REFUSED
+    // fallback below, wrongly implying a firewall block for a connection
+    // that was actually established -- one cause is a config-side
+    // trust-store gap breaking the OAuth token fetch mid-request, not a
+    // network block at all.
     if (text.contains("connectionclosedexception") || text.contains("connection is closed")) {
       return new String[] {
         "CONNECTION_CLOSED",

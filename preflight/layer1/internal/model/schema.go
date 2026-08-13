@@ -49,11 +49,10 @@ const (
 	// closed unexpectedly mid-request (e.g. Java's
 	// org.apache.hc.core5.http.ConnectionClosedException) -- deliberately
 	// distinct from ErrConnectRefused (which means the connection was never
-	// established at all, e.g. a firewall drop). Found live: this exact
-	// class of error was being mislabeled CONNECT_REFUSED, wrongly implying
-	// a firewall block, when a real cause found in this project was a
-	// config-side trust-store gap in a request interceptor that ran before
-	// the request completed -- not a network block at all. Not in
+	// established at all, e.g. a firewall drop). Kept distinct because a
+	// connection that opened and then closed has a genuinely different
+	// cause set from one that never opened -- e.g. a config-side
+	// trust-store gap in a request interceptor, not a firewall block. Not in
 	// networkFailCodes (build.go): the cause is genuinely ambiguous (could
 	// be a stale proxy, a misbehaving interceptor, or something server-side)
 	// so it must not claim "your network," and it must not outrank a

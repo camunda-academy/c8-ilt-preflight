@@ -38,8 +38,7 @@
     <!-- Keep build noise (restore/compile messages) off this probe's own
          stdout: run.sh/run.cmd additionally redirect the whole `dotnet
          build` step's stdout to stderr as belt-and-suspenders, since stdout
-         here is a machine-parsed, newline-delimited JSON channel (plan
-         Section 4a). -->
+         here is a machine-parsed, newline-delimited JSON channel. -->
     <NoWarn>$(NoWarn);CS8618</NoWarn>
   </PropertyGroup>
 

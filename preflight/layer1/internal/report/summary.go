@@ -336,7 +336,7 @@ func Footer(r model.Result) string {
 		fmt.Fprintf(&b, "FAILED at stage: %s\n", r.Overall.FailingStage)
 	}
 	if r.Overall.IsOurClusterProblem {
-		b.WriteString("NOTE: this looks like a problem with OUR shared preflight cluster, not your network. Re-run in ~5 minutes.\n")
+		b.WriteString("NOTE: this looks like a problem with our shared preflight cluster, not your network. Re-run in ~5 minutes.\n")
 	}
 	return b.String()
 }

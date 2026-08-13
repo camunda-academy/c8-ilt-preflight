@@ -15,9 +15,7 @@ type topologyResponse struct {
 
 // CheckTopology performs the full-mode authenticated GET /v2/topology check
 // — the end-to-end confirmation that the shared credential, audience, and
-// scope actually work (full mode is now a one-time, representative
-// confirmation, not run per participant, but the check itself is
-// unchanged).
+// scope work.
 func CheckTopology(ctx context.Context, client *http.Client, restBase, host, accessToken string) model.Stage {
 	url := restBase + "/v2/topology"
 

@@ -454,8 +454,8 @@ function tlsHandshake(rawSocket, host, trust, timeoutMs) {
  * make the IDENTICAL trust decision for the same CAMUNDA_MTLS_CA_PATH value,
  * or Layer 2 re-introduces the exact false-green this whole probe exists to
  * prevent. REPLACE, not append -- verified against the real SDK's own
- * published source (see probe.js's original module doc comment for the full
- * verified reasoning, including a live empirical test): once a custom CA is
+ * published source (see probe.js's module doc comment for the full
+ * reasoning): once a custom CA is
  * set, ONLY that CA is trusted, not "OS store + custom CA".
  */
 function buildTrustContext() {

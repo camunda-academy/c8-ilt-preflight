@@ -165,14 +165,14 @@ func TestProbeEnv_JavaTrustStoreWinsOverCACertPath(t *testing.T) {
 
 	env := probeEnv(ProbeConfig{
 		Mode:               "network",
-		CACertPath:         "/tmp/mitmproxy-ca.pem",
+		CACertPath:         "/tmp/corp-proxy-ca.pem",
 		JavaTrustStorePath: "/tmp/custom-truststore.jks",
 	})
 	if got := count(env, "CAMUNDA_CA_CERTIFICATE_PATH"); len(got) != 0 {
 		t.Errorf("CAMUNDA_CA_CERTIFICATE_PATH = %v, want none (must not win over --java-truststore, forwarded or inherited)", got)
 	}
-	if got := count(env, "CAMUNDA_MTLS_CA_PATH"); len(got) != 1 || got[0] != "CAMUNDA_MTLS_CA_PATH=/tmp/mitmproxy-ca.pem" {
-		t.Errorf("CAMUNDA_MTLS_CA_PATH = %v, want [CAMUNDA_MTLS_CA_PATH=/tmp/mitmproxy-ca.pem] (--trust-ca must still reach Go/Python/TS)", got)
+	if got := count(env, "CAMUNDA_MTLS_CA_PATH"); len(got) != 1 || got[0] != "CAMUNDA_MTLS_CA_PATH=/tmp/corp-proxy-ca.pem" {
+		t.Errorf("CAMUNDA_MTLS_CA_PATH = %v, want [CAMUNDA_MTLS_CA_PATH=/tmp/corp-proxy-ca.pem] (--trust-ca must still reach Go/Python/TS)", got)
 	}
 	if got := count(env, "CAMUNDA_JAVA_TRUSTSTORE"); len(got) != 1 || got[0] != "CAMUNDA_JAVA_TRUSTSTORE=/tmp/custom-truststore.jks" {
 		t.Errorf("CAMUNDA_JAVA_TRUSTSTORE = %v, want [CAMUNDA_JAVA_TRUSTSTORE=/tmp/custom-truststore.jks]", got)
@@ -658,7 +658,7 @@ func TestDetectRuntime_DirectoryPinResolvesBinary(t *testing.T) {
 
 // TestPinFailureReason_DistinguishesDirectoryFromMissing guards the message
 // itself: reporting "file does not exist" for a directory that plainly does
-// exist is what sent a real user looking in the wrong place.
+// exist would send the reader looking in the wrong place.
 func TestPinFailureReason_DistinguishesDirectoryFromMissing(t *testing.T) {
 	dir := t.TempDir()
 	got := pinFailureReason("csharp", dir, []string{filepath.Join(dir, "dotnet.exe")})
@@ -715,8 +715,8 @@ func TestInheritedGlobalJSONWarning(t *testing.T) {
 // pure function is tested directly in the redact package, but this proves
 // Run() actually calls it before RuntimeDetail.Binary reaches the caller --
 // the field that lands in the result JSON unconditionally, not just under
-// --verbose. Reproduces the real shape a live run produced (a per-user
-// install directory) rather than an synthetic path unlikely to occur.
+// --verbose. Uses a realistic per-user install directory rather than a
+// synthetic path.
 func TestRun_MasksHomeDirInRuntimeDetail(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "Users", "realname")
 	binDir := filepath.Join(home, "bin")
@@ -756,5 +756,38 @@ func TestRun_MasksHomeDirInRuntimeDetail(t *testing.T) {
 	}
 	if !strings.Contains(runtimes[0].Binary, "<redacted-user>") {
 		t.Errorf("RuntimeDetail.Binary should carry the masked placeholder; got %q", runtimes[0].Binary)
+	}
+}
+
+// TestProbeEnv_StripsCredentialAliases guards the strip list, which has to
+// cover more than the CAMUNDA_CLIENT_* spellings: the older ZEEBE_* names are
+// what the earlier SaaS credentials download hands out and
+// CAMUNDA_CLIENT_AUTH_PASSWORD is the 8.8+ basic-auth spelling — a participant
+// can have any of them exported without ever having typed one. That matters
+// more than it looks: in network mode the tool never sees these as flags, so
+// redact.Secrets does not know their values, and its refuse-to-write guard
+// cannot catch them if a probe echoes one into captured stderr (which is
+// embedded into the shareable result file).
+func TestProbeEnv_StripsCredentialAliases(t *testing.T) {
+	aliases := []string{
+		"ZEEBE_CLIENT_SECRET", "ZEEBE_CLIENT_ID",
+		"CAMUNDA_CLIENT_AUTH_PASSWORD", "CAMUNDA_CLIENT_AUTH_USERNAME",
+		"CAMUNDA_CONSOLE_CLIENT_SECRET",
+	}
+	for _, name := range aliases {
+		t.Setenv(name, "should-not-reach-probe")
+	}
+
+	env := probeEnv(ProbeConfig{Mode: "network"})
+	for _, name := range aliases {
+		if got := count(env, name); len(got) != 0 {
+			t.Errorf("network-mode probe env still carries %s: %v", name, got)
+		}
+	}
+
+	// Full mode legitimately needs them.
+	fullEnv := probeEnv(ProbeConfig{Mode: "full"})
+	if got := count(fullEnv, "ZEEBE_CLIENT_SECRET"); len(got) != 1 {
+		t.Errorf("full mode should pass credentials through, got %v", got)
 	}
 }

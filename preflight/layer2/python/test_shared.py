@@ -107,8 +107,8 @@ class ScrubUrlCredsTest(unittest.TestCase):
 
     def test_fragment_scrubs_detail(self):
         frag = _shared.fragment("t", "FAIL", "CONNECT_REFUSED",
-                                "proxy https://bob:hunter2@p:3128 refused")
-        self.assertNotIn("hunter2", frag["detail"])
+                                "proxy https://bob:s3cret2@p:3128 refused")
+        self.assertNotIn("s3cret2", frag["detail"])
         self.assertIn("****:****@p:3128", frag["detail"])
 
     def test_leaves_plain_urls_intact(self):

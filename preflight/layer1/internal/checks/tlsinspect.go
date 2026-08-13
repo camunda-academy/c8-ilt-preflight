@@ -152,7 +152,7 @@ func TLSInspect(ctx context.Context, conn net.Conn, host string, port int, custo
 			Verdict: model.VerdictWarn, RemediationCode: model.ErrTLSNonPublicIssuer,
 			Detail: fmt.Sprintf(
 				"issuer: %s — NOT trusted by the system root store (likely a TLS-intercepting proxy). "+
-					"Fix: import the proxy's root CA into this runtime's trust store, not --insecure. Verify error: %s",
+					"Fix: import the proxy's root CA into this runtime's trust store, not by disabling certificate verification. Verify error: %s",
 				info.Issuer, verifyDetail),
 			ElapsedMs: elapsed,
 		}

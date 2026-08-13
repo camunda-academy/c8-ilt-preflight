@@ -29,21 +29,16 @@
  * published dist/chunk-WSCXETVI.js) builds `new https.Agent({ca: <PEM>})`
  * whenever CAMUNDA_MTLS_CA_PATH/_CA/_CERT_PATH/_KEY_PATH are set -- it does
  * NOT spread Node's own `tls.rootCertificates` into that `ca` value first.
- * An https.Agent constructed with ONLY a (dummy) custom `ca` fails to
- * verify a real public-CA-signed host (login.cloud.camunda.io) with
- * UNABLE_TO_GET_ISSUER_CERT_LOCALLY, confirming Node's documented
- * tls.createSecureContext() behavior that supplying `ca` REPLACES the
- * well-known Mozilla-curated default list rather than extending it.
- * (Spreading `[...tls.rootCertificates, customCa]` instead DOES append
+ * Per Node's documented tls.createSecureContext() behavior, supplying `ca`
+ * REPLACES the well-known Mozilla-curated default list rather than extending
+ * it. (Spreading `[...tls.rootCertificates, customCa]` instead DOES append
  * correctly -- but that is not what the real SDK does, so this probe does
  * not do it either.)
  *
- * This means the TypeScript SDK's real custom-CA behavior matches JAVA's
- * (replace), not Go/Python's (append). An initial assumption of append,
- * mirroring Go/Python, would have been WRONG for this runtime -- corrected
- * here after verification, since custom-CA semantics must always be verified
- * from source rather than guessed. Faithfully mirroring the real SDK's
- * REPLACE behavior is required by this tier's whole
+ * The TypeScript SDK's real custom-CA behavior therefore matches Java's
+ * (replace), not Go/Python's (append) -- custom-CA semantics differ per
+ * runtime and must be read from each SDK's source. Faithfully mirroring the
+ * real SDK's REPLACE behavior is required by this tier's whole
  * purpose: exercising the SAME trust store the real SDK uses. A probe that
  * merely appended (like Go/Python do for their own SDKs) would risk a false
  * PASS in exactly the scenario where the real client, having discarded the

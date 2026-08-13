@@ -179,8 +179,8 @@ func classifyDialError(err error) (code string, detail string) {
 		// Windows connectex/WSAECONNREFUSED "...actively refused it."
 		// (remote-side reject/RST); and Windows WSAEACCES "...forbidden by
 		// its access permissions" (local OS-level block — this is what
-		// Windows Firewall's own Block rule produces, confirmed via
-		// New-NetFirewallRule -Action Block, distinct from a remote RST).
+		// a Windows Firewall block rule produces, distinct from a remote
+		// RST).
 		// All three must be matched or Windows runs (the majority of
 		// trainees) silently fall through to the generic default branch
 		// with no detail text and no remediation hint at all.

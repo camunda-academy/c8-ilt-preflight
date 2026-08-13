@@ -295,10 +295,9 @@ func Parse(argv []string) (*Config, error) {
 	}
 
 	// Mode: network is the hard default. No auto-detect from credential
-	// presence -- silently switching to full mode just because
-	// CAMUNDA_CLIENT_ID/SECRET happen to be set in the environment (e.g.
-	// left over from an earlier, unrelated run) was a surprise footgun, not
-	// a convenience. Full mode is opt-in: pass --mode full explicitly.
+	// presence -- CAMUNDA_CLIENT_ID/SECRET being set in the environment
+	// (e.g. left over from an earlier, unrelated run) does not switch the
+	// mode. Full mode is opt-in: pass --mode full explicitly.
 	modeArg := strings.ToLower(strings.TrimSpace(*modeFlag))
 	switch modeArg {
 	case "network", "":

@@ -3,22 +3,20 @@
   <!--
     Layer 2 SDK-snippet confirmation (C#/.NET), tier 2.
 
-    Package/version verified against the live NuGet registry and the tagged
-    GitHub source, not assumed from an initial guess ("Camunda.Orchestration.Sdk 9.*, .NET 8+"):
-      - The package name WAS correct: Camunda.Orchestration.Sdk really is the
-        current Camunda 8 C#/.NET SDK
+    Package/version verified against the NuGet registry and the tagged GitHub
+    source:
+      - Camunda.Orchestration.Sdk is the current Camunda 8 C#/.NET SDK
         (github.com/camunda/orchestration-cluster-api-csharp).
-      - The initial "9.*" guess was a RANGE, which this project's exact-pin policy
-        forbids for auto-install (a range lets a future compromised release in
-        silently). The NuGet registry's listed versions top out at 9.1.3
-        (published 2026-06-25). A 10.0.0 stable WAS published on NuGet but is
-        UNLISTED (published date 1900-01-01, listed:false via the registration
-        API) - superseded by the 10.0.0-alpha.x prerelease line, which targets
-        Camunda 8.10. Per the SDK's own README: "SDK version n.y.z -> server
-        version 8.n", so 9.y.z is the correct major for this project's 8.9
-        target, matching the v9.1.3 git tag exactly. Pinned exactly to 9.1.3
-        below (this project's hard security policy: exact-pinned auto-installed
-        dependencies only, never a range).
+      - Pinned exactly to 9.1.3 below. This project's hard security policy is
+        exact-pinned auto-installed dependencies only, never a range: a range
+        lets a future compromised release in silently. The NuGet registry's
+        listed versions top out at 9.1.3 (published 2026-06-25). A 10.0.0
+        stable WAS published on NuGet but is UNLISTED (published date
+        1900-01-01, listed:false via the registration API) - superseded by the
+        10.0.0-alpha.x prerelease line, which targets Camunda 8.10. Per the
+        SDK's own README: "SDK version n.y.z -> server version 8.n", so 9.y.z
+        is the correct major for this project's 8.9 target, matching the v9.1.3
+        git tag exactly.
       - TargetFramework is deliberately FIXED here, unlike Probe.csproj which
         derives it from the installed SDK. Two reasons pull this way:
         packages.lock.json records its resolved graph per target framework, and

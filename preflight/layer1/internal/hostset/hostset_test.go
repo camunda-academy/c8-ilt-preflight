@@ -2,8 +2,7 @@ package hostset
 
 import "testing"
 
-// A syntactically valid but fake UUID — never the real cluster id (kept out
-// of tracked source per the repo's no-infra-identifiers convention).
+// A syntactically valid but fake UUID — real cluster ids are never committed.
 const testClusterID = "11111111-2222-4333-8444-555555555555"
 
 // TestResolveExplicitHostVariants covers the range of CAMUNDA_REST_ADDRESS
@@ -63,7 +62,7 @@ func TestResolveRejectsBadHost(t *testing.T) {
 func TestRegionPrecedence(t *testing.T) {
 	tgt, err := Resolve(Inputs{
 		ExplicitHost: "https://bru-2.api.camunda.io/" + testClusterID,
-		Region:       "dsyd-1",
+		Region:       "syd-1",
 	})
 	if err != nil {
 		t.Fatal(err)

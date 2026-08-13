@@ -31,7 +31,7 @@
  *  - package.json declares "engines": {"node": ">=22"}, but the README says
  *    "Node 20+ (native fetch & File)" -- the two disagree. engines.node is
  *    npm's own install-time-enforced contract, so treat Node 22+ as the real
- *    requirement (this machine's Node is v22.14.0, satisfying both anyway).
+ *    requirement.
  *
  * Supply-chain note: this directory ships a package.json pinning the EXACT
  * version plus a package-lock.json with npm's integrity hashes (generated
@@ -86,8 +86,8 @@
  * engineering team should apply to their own application -- three lines of
  * setup, no custom HTTP client needed).
  *
- * Auth-strategy auto-upgrade gap (mirrors Python's known gap
- * #1, a different mechanism, same risk): this
+ * Auth-strategy auto-upgrade gap (the Python SDK has an equivalent gap by a
+ * different mechanism, same risk): this
  * SDK's config hydration auto-upgrades CAMUNDA_AUTH_STRATEGY from its NONE
  * default to OAUTH the moment CAMUNDA_CLIENT_ID/CAMUNDA_CLIENT_SECRET are
  * present in the environment -- even if CAMUNDA_AUTH_STRATEGY was never set
@@ -183,21 +183,18 @@ function installSdk() {
  * native check correctly tunnels through it while tier 2 silently bypassed
  * the proxy entirely and connected straight to the real internet.
  *
- * EARLIER VERSION of this fix (superseded here) hand-wrote a hand-rolled
- * HTTP/1.1 client + manual CONNECT tunnel as a custom `fetch` override. That
- * worked, but carried real downsides verified against `undici`'s ProxyAgent
- * instead: no redirect-following, a minimal chunked-decoder, and tight
- * coupling to this SDK's exact today's request shape. `undici` (the same
- * library Node's OWN global fetch is built on) ships an official `ProxyAgent`
- * dispatcher for exactly this use case: it (a) correctly
- * tunnels a real request through a local test proxy and (b) auto-derives
- * Basic proxy-auth from the proxy URL's userinfo, same as this probe's own
- * hand-rolled tunnel did (verified against `ProxyAgent`'s own source,
+ * WHY `undici`'s ProxyAgent: `undici` is the same library Node's OWN global
+ * fetch is built on, and it ships an official `ProxyAgent` dispatcher for
+ * exactly this use case. It tunnels the request through the proxy, follows
+ * redirects, decodes chunked responses, and auto-derives Basic proxy-auth
+ * from the proxy URL's userinfo (see `ProxyAgent`'s own source,
  * `lib/dispatcher/proxy-agent.js`: `username`/`password` parsed straight off
- * the proxy URL). This is also the exact fix a real customer engineering
- * team would apply to their own application -- three lines
+ * the proxy URL) -- none of which a hand-rolled CONNECT tunnel + minimal
+ * HTTP/1.1 client would give without tight coupling to this SDK's current
+ * request shape. It is also the exact fix a real customer engineering team
+ * would apply to their own application -- three lines
  * (`setGlobalDispatcher(new ProxyAgent(...))`), no custom code -- so this
- * probe now tests the SAME real-world remediation instead of a bespoke
+ * probe exercises the SAME real-world remediation instead of a bespoke
  * workaround.
  *
  * Returns a restore function that puts the previous global dispatcher back
@@ -338,12 +335,11 @@ async function runChecks(sdkModule) {
       // 'debug' level, this SDK's own config.hydrated event logs
       // CAMUNDA_CLIENT_ID COMPLETELY UNMASKED (only
       // CAMUNDA_CLIENT_SECRET gets redacted) -- the same class of leak Python's
-      // probe_sdk.py found and fixed with an explicit NullLogger(). GOOD NEWS:
-      // unlike Python (where CAMUNDA_SDK_LOG_LEVEL=silent
-      // was confirmed NOT to suppress the leak, requiring logger=NullLogger()
-      // specifically), this SDK's log.level:'silent' DOES fully suppress every
-      // transport call, including config.hydrated -- confirmed by wiring a
-      // transport spy and observing zero invocations with 'silent' set. Passed
+      // probe_sdk.py addresses with an explicit NullLogger().
+      // Unlike the Python SDK (where CAMUNDA_SDK_LOG_LEVEL=silent does NOT
+      // suppress the leak, requiring logger=NullLogger() specifically), this
+      // SDK's log.level:'silent' does fully suppress every transport call,
+      // including config.hydrated. Passed
       // programmatically here (belt-and-suspenders) rather than relying only on
       // the CAMUNDA_SDK_LOG_LEVEL=silent env var, so it can never be skipped by
       // an unset/overridden env var.

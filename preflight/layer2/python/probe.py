@@ -58,12 +58,21 @@ def resolve_targets():
 
 
 def build_ssl_context():
-    # store_label is kept short and plain-language deliberately -- it ends up
-    # in the customer-facing result (Notes/FAIL details), not just an
-    # engineering log.
+    """Build the SSL context this probe hands to every target, plus a
+    plain-language label for it and an optional pre-formed WARN fragment.
+
+    Returns (ctx, store_label, warn). store_label is kept short and
+    plain-language deliberately -- it ends up in the customer-facing result
+    (Notes/FAIL details), not just an engineering log. warn is a fragment the
+    caller must emit on stdout when the check had to fall back to a weaker
+    trust store than the SDK's; a label alone is not enough, because the label
+    rides along with a PASS and the degradation has to be readable in the
+    result file the customer sends back.
+    """
     import os
 
     custom_ca = os.environ.get("CAMUNDA_MTLS_CA_PATH", "").strip()
+    warn = None
     try:
         import certifi
 
@@ -74,12 +83,23 @@ def build_ssl_context():
         # so explicitly via store_label so the weaker check stays visible.
         ctx = ssl.create_default_context()
         store_label = "the default certificate bundle (installing 'certifi' is recommended for the most accurate check)"
+        # The stdlib default loads the operating system's trust store, which
+        # the Camunda Python SDK does not use. Where a corporate TLS-
+        # intercepting proxy's root CA sits in the OS store, this check can
+        # PASS while the SDK still fails -- so record it as its own fragment.
+        warn = fragment(
+            "%s (config)" % resolve_api_host(), "WARN", "CONFIG_ERROR",
+            "'certifi' is not installed, so this check exercised the operating system's trust store "
+            "instead of the certifi bundle the Camunda Python SDK actually uses. A PASS here may not "
+            "reflect what the SDK will do -- for example, a corporate TLS-intercepting proxy whose root "
+            "CA is in the operating system store is trusted here but not by the SDK. Install certifi "
+            "(pip install certifi) and re-run this preflight for an accurate result.")
 
     if custom_ca:
         ctx.load_verify_locations(cafile=custom_ca)
         store_label = "the default certificate bundle plus your custom certificate (%s)" % custom_ca
 
-    return ctx, store_label
+    return ctx, store_label, warn
 
 
 def connect_via_proxy(proxy_url, host, port, timeout):
@@ -162,7 +182,11 @@ def main():
         eprint(__doc__)
         return 0
 
-    ctx, store_label = build_ssl_context()
+    ctx, store_label, warn = build_ssl_context()
+    if warn:
+        print(json.dumps(warn))
+        sys.stdout.flush()
+
     proxy_url = get_proxy_url()
     if proxy_url:
         eprint("[python probe] using proxy: %s" % mask_proxy(proxy_url))

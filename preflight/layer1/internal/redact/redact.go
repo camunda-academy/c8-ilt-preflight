@@ -3,6 +3,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -88,25 +89,68 @@ type Secrets struct {
 	JavaTrustStorePassword string
 }
 
+// jsonEscaped returns how s appears once encoded into a JSON string value.
+//
+// This matters because the leak scan runs against ALREADY-MARSHALLED JSON.
+// encoding/json escapes `"` and `\`, and HTML-escapes `&`, `<` and `>` into
+// &-style sequences, so a plaintext comparison silently misses any secret
+// containing them — which is exactly the shape of a user-chosen proxy or
+// truststore password. Comparing against both forms closes that.
+func jsonEscaped(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil || len(b) < 2 {
+		return s
+	}
+	return string(b[1 : len(b)-1]) // strip the surrounding quotes
+}
+
+// containsSecret reports whether text carries value either literally or in its
+// JSON-encoded form.
+func containsSecret(text, value string) bool {
+	if value == "" {
+		return false
+	}
+	if strings.Contains(text, value) {
+		return true
+	}
+	if esc := jsonEscaped(value); esc != value && strings.Contains(text, esc) {
+		return true
+	}
+	return false
+}
+
+// bearerTokenPattern matches an Authorization-style bearer value: the scheme
+// followed by something long enough to actually be a token.
+//
+// A bare `strings.Contains(text, "Bearer ")` would be too blunt: this tool runs
+// against hostile and misconfigured proxies by design, and their error pages
+// routinely contain prose like `must use the "Bearer " scheme`. Any such text
+// reaches a Stage detail, so a substring match would trip the guard and
+// suppress the ENTIRE result file — on precisely the broken-network run where
+// the participant most needs a file to send. Requiring token-shaped material
+// keeps the guard useful without handing a remote party a switch to silence
+// the output.
+var bearerTokenPattern = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{16,}`)
+
 // ScanForLeak returns a non-empty reason if s contains any known secret
 // material or an obvious bearer-token pattern. This is a last-resort guard,
 // not the primary defense — callers must not construct output containing
 // secrets in the first place; this only catches accidental future leaks.
 func (s Secrets) ScanForLeak(text string) string {
-	if s.ClientSecret != "" && strings.Contains(text, s.ClientSecret) {
+	if containsSecret(text, s.ClientSecret) {
 		return "output contains the raw client secret"
 	}
-	if s.AccessToken != "" && strings.Contains(text, s.AccessToken) {
+	if containsSecret(text, s.AccessToken) {
 		return "output contains the raw access token"
 	}
-	if s.ProxyPassword != "" && strings.Contains(text, s.ProxyPassword) {
+	if containsSecret(text, s.ProxyPassword) {
 		return "output contains the raw proxy password"
 	}
-	if s.JavaTrustStorePassword != "" && strings.Contains(text, s.JavaTrustStorePassword) {
+	if containsSecret(text, s.JavaTrustStorePassword) {
 		return "output contains the raw Java truststore password"
 	}
-	if strings.Contains(text, "Bearer ") {
-		return "output contains a literal 'Bearer ' authorization value"
+	if bearerTokenPattern.MatchString(text) {
+		return "output contains what looks like a bearer token"
 	}
 	return ""
 }
@@ -120,17 +164,17 @@ func (s Secrets) ScanForLeak(text string) string {
 // reflected back to the terminal could otherwise carry the client secret
 // past the file-only self-check.
 func (s Secrets) Scrub(text string) string {
-	if s.ClientSecret != "" {
-		text = strings.ReplaceAll(text, s.ClientSecret, "****")
-	}
-	if s.AccessToken != "" {
-		text = strings.ReplaceAll(text, s.AccessToken, "****")
-	}
-	if s.ProxyPassword != "" {
-		text = strings.ReplaceAll(text, s.ProxyPassword, "****")
-	}
-	if s.JavaTrustStorePassword != "" {
-		text = strings.ReplaceAll(text, s.JavaTrustStorePassword, "****")
+	// Both forms, for the same reason ScanForLeak checks both: Scrub also runs
+	// over already-marshalled JSON, where a secret containing " \ & < or >
+	// appears only in its escaped form and a plaintext replace would miss it.
+	for _, secret := range []string{s.ClientSecret, s.AccessToken, s.ProxyPassword, s.JavaTrustStorePassword} {
+		if secret == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, secret, "****")
+		if esc := jsonEscaped(secret); esc != secret {
+			text = strings.ReplaceAll(text, esc, "****")
+		}
 	}
 	// Masked, not fully hidden: first4...last4 keeps it diagnostically useful
 	// for the operator ("is that the id I actually issued?") while still
