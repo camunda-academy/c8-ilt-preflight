@@ -64,6 +64,12 @@ func Resolve(in Inputs) (Target, error) {
 		if in.ClusterID == "" {
 			return Target{}, fmt.Errorf("no cluster target resolvable: set CAMUNDA_REST_ADDRESS (full URL), or CAMUNDA_CLUSTER_ID plus optionally CAMUNDA_REGION")
 		}
+		// Same UUID check as the --host path (see parseExplicitHost) -- both
+		// entry points must reject a bad clusterId with the same clear error
+		// rather than only one of them catching it.
+		if !uuidRe.MatchString(in.ClusterID) {
+			return Target{}, fmt.Errorf("invalid cluster id: %q is not a UUID — copy it again from Camunda Console", in.ClusterID)
+		}
 		t.Region = region
 		t.ClusterID = in.ClusterID
 	}
@@ -125,6 +131,15 @@ func parseExplicitHost(raw string) (region, clusterID, family string, err error)
 
 	// Find the clusterId: the UUID segment anywhere in the path. This skips
 	// stray ":443"/"443" segments, the "/v2/" suffix, and trailing slashes.
+	//
+	// A segment that ISN'T a UUID is never accepted as a clusterId, even as a
+	// fallback: doing so used to build a syntactically valid but nonexistent
+	// REST base (e.g. .../a/v2/status), which the cluster edge then answers
+	// with a plain 404 -- indistinguishable, downstream, from the shared
+	// training cluster being genuinely paused. Rejecting it here instead, by
+	// the same UUID shape every real clusterId has, turns a wrong --host into
+	// an immediate, specific config error instead of a misleading network
+	// result five stages later.
 	for _, seg := range strings.Split(u.Path, "/") {
 		if uuidRe.MatchString(seg) {
 			clusterID = seg
@@ -132,19 +147,7 @@ func parseExplicitHost(raw string) (region, clusterID, family string, err error)
 		}
 	}
 	if clusterID == "" {
-		// Fall back to the first non-empty, non-port, non-"v2" segment, in
-		// case a future clusterId format isn't a UUID — but tell the user
-		// what we couldn't find so a genuinely malformed URL is obvious.
-		for _, seg := range strings.Split(u.Path, "/") {
-			if seg == "" || seg == "v2" || seg == "443" || seg == ":443" {
-				continue
-			}
-			clusterID = seg
-			break
-		}
-	}
-	if clusterID == "" {
-		return "", "", "", fmt.Errorf("could not find a cluster id (UUID) in the URL path of %q", raw)
+		return "", "", "", fmt.Errorf("invalid cluster id: no UUID found in the URL path of %q — copy the address from Camunda Console again, or pass --cluster-id/--region separately", raw)
 	}
 	return region, clusterID, family, nil
 }
