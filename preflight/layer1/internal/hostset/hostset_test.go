@@ -1,6 +1,9 @@
 package hostset
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A syntactically valid but fake UUID — real cluster ids are never committed.
 const testClusterID = "11111111-2222-4333-8444-555555555555"
@@ -49,11 +52,41 @@ func TestResolveRejectsBadHost(t *testing.T) {
 		"https://example.com/" + testClusterID,    // wrong domain
 		"https://bru-2.zeebe.camunda.io/:443/v2/", // no UUID anywhere
 		"https://bru-2.api.camunda.io/",           // no clusterId
+		"https://bru-2.api.camunda.io/a",          // non-UUID path segment
 	}
 	for _, h := range bad {
 		if _, err := Resolve(Inputs{ExplicitHost: h}); err == nil {
 			t.Errorf("Resolve(%q) should have errored, got nil", h)
 		}
+	}
+}
+
+// TestResolveRejectsNonUUIDPathSegment guards the specific case that used to
+// slip through as a silent fallback: a non-UUID path segment must be an
+// upfront config error, not a clusterId the tool goes on to use. Using it
+// anyway built a syntactically valid but nonexistent REST base, and the
+// resulting 404 read as "the shared cluster might be paused" -- indistinguishable
+// from a real cluster outage.
+func TestResolveRejectsNonUUIDPathSegment(t *testing.T) {
+	_, err := Resolve(Inputs{ExplicitHost: "http://bru-2.api.camunda.io/a"})
+	if err == nil {
+		t.Fatal("expected an error for a non-UUID path segment, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid cluster id") {
+		t.Errorf("error = %q, want it to say \"invalid cluster id\"", err.Error())
+	}
+}
+
+// TestResolveRejectsNonUUIDClusterIDFlag guards the --cluster-id entry point
+// the same way TestResolveRejectsNonUUIDPathSegment guards --host -- both
+// must reject a bad clusterId with the same clear error.
+func TestResolveRejectsNonUUIDClusterIDFlag(t *testing.T) {
+	_, err := Resolve(Inputs{ClusterID: "a", Region: "bru-2"})
+	if err == nil {
+		t.Fatal("expected an error for a non-UUID --cluster-id, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid cluster id") {
+		t.Errorf("error = %q, want it to say \"invalid cluster id\"", err.Error())
 	}
 }
 

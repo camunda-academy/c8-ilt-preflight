@@ -8,6 +8,9 @@ import (
 	"testing"
 )
 
+// A syntactically valid but fake UUID — real cluster ids are never committed.
+const testClusterID = "11111111-2222-4333-8444-555555555555"
+
 // TestParse_HelpDoesNotLeakEnvCreds is a regression test guarding against a
 // real leak: flag defaults populated from env vars would leak, since Go
 // prints defaults in --help, so `preflight --help` would dump
@@ -101,7 +104,7 @@ func TestParse_AcceptsKnownStacks(t *testing.T) {
 
 // TestParse_TrustCAFlag confirms the current flag name resolves correctly.
 func TestParse_TrustCAFlag(t *testing.T) {
-	cfg, err := Parse([]string{"--cluster-id", "test-cluster", "--trust-ca", "/tmp/corp-ca.pem"})
+	cfg, err := Parse([]string{"--cluster-id", testClusterID, "--trust-ca", "/tmp/corp-ca.pem"})
 	if err != nil {
 		t.Fatalf("--trust-ca should parse, got: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestParse_TrustCAFlag(t *testing.T) {
 // --trust-ca rename: --ca must keep working, unchanged, as a deprecated
 // alias so existing scripts/muscle memory don't break outright.
 func TestParse_LegacyCAFlagStillWorks(t *testing.T) {
-	cfg, err := Parse([]string{"--cluster-id", "test-cluster", "--ca", "/tmp/corp-ca.pem"})
+	cfg, err := Parse([]string{"--cluster-id", testClusterID, "--ca", "/tmp/corp-ca.pem"})
 	if err != nil {
 		t.Fatalf("--ca (legacy alias) should still parse, got: %v", err)
 	}
@@ -127,7 +130,7 @@ func TestParse_LegacyCAFlagStillWorks(t *testing.T) {
 // if both are somehow given.
 func TestParse_TrustCAWinsOverLegacyCA(t *testing.T) {
 	cfg, err := Parse([]string{
-		"--cluster-id", "test-cluster",
+		"--cluster-id", testClusterID,
 		"--trust-ca", "/tmp/new.pem", "--ca", "/tmp/old.pem",
 	})
 	if err != nil {
@@ -141,7 +144,7 @@ func TestParse_TrustCAWinsOverLegacyCA(t *testing.T) {
 // TestParse_MavenDepcheckRequiresJava guards against a no-op: the depcheck runs
 // only inside the Java probe, so opting in without the java stack does nothing.
 func TestParse_MavenDepcheckRequiresJava(t *testing.T) {
-	_, err := Parse([]string{"--cluster-id", "test-cluster", "--maven-depcheck", "--stacks", "python"})
+	_, err := Parse([]string{"--cluster-id", testClusterID, "--maven-depcheck", "--stacks", "python"})
 	if err == nil {
 		t.Fatal("expected an error for --maven-depcheck without the java stack, got nil")
 	}
@@ -152,7 +155,7 @@ func TestParse_MavenDepcheckRequiresJava(t *testing.T) {
 
 // TestParse_MavenDepcheckWithJava confirms the opt-in parses with java selected.
 func TestParse_MavenDepcheckWithJava(t *testing.T) {
-	cfg, err := Parse([]string{"--cluster-id", "test-cluster", "--maven-depcheck", "--stacks", "java"})
+	cfg, err := Parse([]string{"--cluster-id", testClusterID, "--maven-depcheck", "--stacks", "java"})
 	if err != nil {
 		t.Fatalf("--maven-depcheck --stacks java should parse, got: %v", err)
 	}
@@ -165,7 +168,7 @@ func TestParse_MavenDepcheckWithJava(t *testing.T) {
 // the check on without a separate --maven-depcheck.
 func TestParse_MavenMirrorImpliesDepcheck(t *testing.T) {
 	cfg, err := Parse([]string{
-		"--cluster-id", "test-cluster", "--stacks", "java",
+		"--cluster-id", testClusterID, "--stacks", "java",
 		"--maven-mirror", "https://nexus.corp/repo",
 	})
 	if err != nil {
@@ -288,7 +291,7 @@ func TestParse_FlagWinsOverEnv(t *testing.T) {
 // instead of a clear "unsupported" message. Only http(s) proxy schemes are
 // actually supported (no SOCKS, no NTLM/Negotiate).
 func TestParse_RejectsSOCKSProxy(t *testing.T) {
-	_, err := Parse([]string{"--cluster-id", "test-cluster", "--proxy", "socks5://localhost:1080"})
+	_, err := Parse([]string{"--cluster-id", testClusterID, "--proxy", "socks5://localhost:1080"})
 	if err == nil {
 		t.Fatal("expected an error for an unsupported SOCKS proxy scheme, got nil")
 	}
@@ -299,7 +302,7 @@ func TestParse_RejectsSOCKSProxy(t *testing.T) {
 
 func TestParse_AcceptsHTTPAndHTTPSProxy(t *testing.T) {
 	for _, scheme := range []string{"http://localhost:8080", "https://localhost:8443"} {
-		cfg, err := Parse([]string{"--cluster-id", "test-cluster", "--proxy", scheme})
+		cfg, err := Parse([]string{"--cluster-id", testClusterID, "--proxy", scheme})
 		if err != nil {
 			t.Errorf("--proxy %q should be accepted, got error: %v", scheme, err)
 		}
@@ -310,7 +313,7 @@ func TestParse_AcceptsHTTPAndHTTPSProxy(t *testing.T) {
 }
 
 func TestParse_NoProxyFlagIsFine(t *testing.T) {
-	_, err := Parse([]string{"--cluster-id", "test-cluster"})
+	_, err := Parse([]string{"--cluster-id", testClusterID})
 	if err != nil {
 		t.Errorf("no --proxy flag at all should not error, got: %v", err)
 	}
@@ -322,7 +325,7 @@ func TestParse_NoProxyFlagIsFine(t *testing.T) {
 // error) -- so a typo'd --java-truststore path would otherwise produce a
 // quiet false PASS instead of a config error. Catch it here, loudly.
 func TestParse_RejectsMissingJavaTrustStore(t *testing.T) {
-	_, err := Parse([]string{"--cluster-id", "test-cluster", "--java-truststore", "/no/such/file.jks"})
+	_, err := Parse([]string{"--cluster-id", testClusterID, "--java-truststore", "/no/such/file.jks"})
 	if err == nil {
 		t.Fatal("expected an error for a --java-truststore path that doesn't exist, got nil")
 	}
@@ -339,7 +342,7 @@ func TestParse_AcceptsRealJavaTrustStore(t *testing.T) {
 	}
 	f.Close()
 
-	cfg, err := Parse([]string{"--cluster-id", "test-cluster", "--java-truststore", f.Name(), "--java-truststore-password", "changeit"})
+	cfg, err := Parse([]string{"--cluster-id", testClusterID, "--java-truststore", f.Name(), "--java-truststore-password", "changeit"})
 	if err != nil {
 		t.Fatalf("a real --java-truststore file should be accepted, got: %v", err)
 	}
@@ -354,7 +357,7 @@ func TestParse_AcceptsRealJavaTrustStore(t *testing.T) {
 // TestParse_RejectsJavaTrustStorePasswordWithoutPath guards a config mistake:
 // a password with nothing to unlock.
 func TestParse_RejectsJavaTrustStorePasswordWithoutPath(t *testing.T) {
-	_, err := Parse([]string{"--cluster-id", "test-cluster", "--java-truststore-password", "changeit"})
+	_, err := Parse([]string{"--cluster-id", testClusterID, "--java-truststore-password", "changeit"})
 	if err == nil {
 		t.Fatal("expected an error for --java-truststore-password without --java-truststore, got nil")
 	}
