@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASES_DIR="$SCRIPT_DIR/../releases"
-VERSION="${PREFLIGHT_VERSION:-0.2}"
+VERSION="${PREFLIGHT_VERSION:-0.2.1}"
 
 mkdir -p "$RELEASES_DIR"
 cd "$SCRIPT_DIR"
