@@ -161,7 +161,7 @@ func Parse(argv []string) (*Config, error) {
 	nodeBin := fs.String("node-bin", "", "TypeScript only: the node binary to check with, instead of whichever node comes first on PATH. Use when several Node majors are installed — the TLS stack and bundled CA set differ between them (env: CAMUNDA_NODE_BIN)")
 	dotnetBin := fs.String("dotnet-bin", "", "C# only: the dotnet binary to check with, instead of whichever dotnet comes first on PATH (env: CAMUNDA_DOTNET_BIN)")
 
-	trainingGroup := fs.String("training-group", "", "opaque training-group/engagement label for the result JSON")
+	trainingGroup := fs.String("training-group", "", "opaque label identifying this training group in the result JSON")
 	outPath := fs.String("out", "", "path to write the result JSON (default: current directory, falls back to temp dir if unwritable)")
 	logFile := fs.String("log-file", "", "optional path for a verbose diagnostic log (redacted, local only)")
 
