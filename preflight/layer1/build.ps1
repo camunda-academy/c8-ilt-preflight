@@ -36,11 +36,31 @@ $ChecksumFile = Join-Path $ReleasesDir "SHA256SUMS.txt"
 # catches the "preflight-windows-amd64.exe~" backup Windows leaves when go build
 # overwrites a locked/old exe (that stray entry then pollutes SHA256SUMS and the
 # allowlist-by-hash guidance derived from it).
-$Targets | ForEach-Object {
+$Lines = $Targets | ForEach-Object {
     $name = "preflight-$($_.GOOS)-$($_.GOARCH)$($_.Ext)"
     $hash = (Get-FileHash -Path (Join-Path $ReleasesDir $name) -Algorithm SHA256).Hash.ToLower()
     "$hash  $name"
-} | Set-Content -Encoding ascii $ChecksumFile
+}
+
+# Layer 2 entrypoint scripts get their own checksums too. Unlike the .java/
+# .cs/.py sources, which only ever run under a signed dotnet/java/python
+# interpreter, run.sh/run.cmd are executed directly by the OS -- exactly like
+# the binary above -- so an endpoint allowlisting product can gate them the
+# same way. A real customer's Application Control blocked layer2/csharp/run.cmd
+# outright, and their security team had no published hash to allowlist it by.
+# Paths are relative to this release folder's root, matching the shipped ZIP's
+# internal layout, so they verify correctly once unzipped.
+$Layer2Root = Join-Path $ScriptDir "..\layer2"
+$Stacks = @("csharp", "java", "python", "typescript")
+foreach ($stack in $Stacks) {
+    foreach ($script in @("run.sh", "run.cmd")) {
+        $path = Join-Path $Layer2Root "$stack\$script"
+        $hash = (Get-FileHash -Path $path -Algorithm SHA256).Hash.ToLower()
+        $Lines += "$hash  layer2/$stack/$script"
+    }
+}
+
+$Lines | Set-Content -Encoding ascii $ChecksumFile
 
 Write-Host ""
 Write-Host "Done. Artifacts + checksums in ${ReleasesDir}:"

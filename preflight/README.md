@@ -51,6 +51,8 @@ chmod +x ./preflight-darwin-amd64   # or preflight-darwin-arm64
 chmod +x ./preflight-linux-amd64
 ```
 
+**"An unauthorized application was blocked" (or similar, from your company's endpoint security software):** this is your organization's own policy, not a bug in this tool — some companies block any program or script without a recognized publisher, and this tool isn't code-signed yet. Try running from a local drive (e.g. your Desktop) rather than a network drive first; if it's still blocked, ask your IT/security team to allow it. They can verify exactly which file they're allowing against the checksums (`SHA256SUMS.txt`) published alongside the download — this covers both the program itself and the `layer2/*/run.sh` / `run.cmd` scripts, since those run directly too and can be blocked the same way.
+
 ---
 
 ## 2. Run the check
