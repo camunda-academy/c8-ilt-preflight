@@ -43,6 +43,19 @@ for target in "${TARGETS[@]}"; do
   sha256sum "preflight-${goos}-${goarch}${ext}" >> "SHA256SUMS.txt"
 done
 
+# Layer 2 entrypoint scripts get their own checksums too. Unlike the .java/
+# .cs/.py sources, which only ever run under a signed dotnet/java/python
+# interpreter, run.sh/run.cmd are executed directly by the OS -- exactly like
+# the binary above -- so an endpoint allowlisting product can gate them the
+# same way, and without a published hash a security team has nothing to
+# allowlist it by.
+# Paths are relative to this release folder's root, matching the shipped ZIP's
+# internal layout, so they verify correctly once unzipped.
+cd "$SCRIPT_DIR/.."
+for stack in csharp java python typescript; do
+  sha256sum "layer2/$stack/run.sh" "layer2/$stack/run.cmd" >> "$CHECKSUM_FILE"
+done
+
 echo
 echo "Done. Artifacts + checksums in $RELEASES_DIR:"
 cat "$CHECKSUM_FILE"
