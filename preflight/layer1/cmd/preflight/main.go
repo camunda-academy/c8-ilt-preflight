@@ -323,7 +323,7 @@ func run(argv []string) int {
 		return int(model.ExitGenericError)
 	}
 	fmt.Printf("\nResults written to: %s\n", writtenPath)
-	fmt.Println("Share this file with your training contact if asked. Use an opaque --training-group label, never a customer name.")
+	fmt.Println("Share this file with your training contact if asked.")
 	// Only the default result filename is gitignored.
 	// If the file landed inside a git working tree (e.g. a custom
 	// --out into the repo), warn — it could carry the real clusterId into a
