@@ -152,8 +152,21 @@ func newProcessTreeKiller(cmd *exec.Cmd) (kill func() error, cleanup func()) {
 
 	k := &processTreeKiller{job: job, process: procHandle}
 	kill = func() error {
-		_, _, _ = procTerminateJobObject.Call(uintptr(k.job), 1)
-		return nil
+		// cmd.Cancel returning nil tells os/exec "handled" -- it never falls
+		// back to its own default Kill() once Cancel is set, so a silently
+		// swallowed failure here would leave the process running with nothing
+		// left to catch it. Checking the result and falling back to the
+		// tracked process alone is strictly better than declaring success on
+		// a call that may not have actually terminated anything.
+		//
+		// The discarded second/third return values from .Call() are NOT an
+		// error-nil-check target here: LazyProc.Call always populates the
+		// third value from GetLastError win-or-lose, so it's meaningless
+		// unless the primary (first) return already reported failure.
+		if terminated, _, _ := procTerminateJobObject.Call(uintptr(k.job), 1); terminated != 0 {
+			return nil
+		}
+		return cmd.Process.Kill()
 	}
 	cleanup = func() {
 		syscall.CloseHandle(k.process)
