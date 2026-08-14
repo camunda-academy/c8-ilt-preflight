@@ -762,15 +762,34 @@ func probeEnv(pc ProbeConfig) []string {
 	return out
 }
 
-// probeTimeoutDefault covers the trust probe (+ optional SDK-snippet probe),
-// both of which are quick network/TLS checks. probeTimeoutWithMavenDepcheck is
-// used instead when the operator opted into the Maven dependency-resolution
-// check: DepCheck runs up to two go-offline legs, each with its own internal
-// 240s timeout, so the OUTER process timeout must comfortably exceed 2x that
-// or the launcher would kill the whole probe mid-fetch and misreport a real
-// (if slow) result as a crash.
+// probeTimeoutDefault covers the trust probe alone, a quick network/TLS
+// check. probeTimeoutWithSDKInstall applies whenever the tier-2 SDK fetch is
+// not opted out (the default -- see NoSDKInstall).
+//
+// This budget has to comfortably exceed how long the underlying tool takes to
+// GIVE UP against a genuinely unreachable mirror, not just a slow-but-working
+// one -- measured directly against a blackholed (non-responding, not merely
+// refused) host: dotnet restore ~36s, npm ci ~135s, pip install up to ~180s
+// (it retries the exact-pinned install twice, each internally capped at 90s),
+// mvn dependency:copy-dependencies ~133s. If this expires before the tool's
+// own retry/backoff exhausts, the process tree gets killed (see
+// procgroup_windows.go/procgroup_other.go) mid-attempt -- which stops an
+// orphaned fetch from running forever, but also means run.sh/run.cmd's own
+// script logic never gets a chance to run its "did this fail?" check and
+// report the specific, accurate cause: the result degrades to a generic
+// PROBE_CRASHED, true regardless of language since the shell hosting that
+// logic is a job member too and dies in the same kill. Comfortable headroom
+// over the slowest measured case (pip's) is what actually prevents that
+// degradation in practice, not the tree-kill by itself.
+//
+// probeTimeoutWithMavenDepcheck is used instead when the operator opted into
+// the Maven dependency-resolution check, which takes priority over the
+// SDK-install budget since it dominates it anyway: DepCheck runs up to two
+// go-offline legs, each with its own internal 240s timeout, so the OUTER
+// process timeout must comfortably exceed 2x that.
 const (
 	probeTimeoutDefault           = 30 * time.Second
+	probeTimeoutWithSDKInstall    = 4 * time.Minute
 	probeTimeoutWithMavenDepcheck = 10 * time.Minute
 )
 
@@ -796,8 +815,11 @@ const stderrTruncateLimit = 4000
 // broken probe) — distinct from SKIP (absent) and from a clean FAIL.
 func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFragment func(model.ProbeFragment)) []model.ProbeFragment {
 	timeout := probeTimeoutDefault
-	if pc.MavenDepcheck {
+	switch {
+	case pc.MavenDepcheck:
 		timeout = probeTimeoutWithMavenDepcheck
+	case !pc.NoSDKInstall:
+		timeout = probeTimeoutWithSDKInstall
 	}
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -808,6 +830,28 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 	cmd.Env = probeEnv(pc)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	configureSysProcAttr(cmd)
+
+	// Deadline-triggered kill must reach the whole process tree, not just this
+	// one tracked process -- see procgroup_windows.go/procgroup_other.go for
+	// why (run.cmd/run.sh's own real work runs as children: dotnet/mvn/pip/npm).
+	// cmd.Cancel is read by the context-watcher os/exec starts once Start()
+	// succeeds; wiring it through a closure that reads a variable set AFTER
+	// Start() (rather than setting cmd.Cancel only post-Start) means there is
+	// no window where an early deadline would fall back to the default
+	// single-process Kill().
+	var treeKill func() error
+	cmd.Cancel = func() error {
+		if treeKill != nil {
+			return treeKill()
+		}
+		return cmd.Process.Kill()
+	}
+	// Belt-and-braces: if the tree kill somehow doesn't make the process exit
+	// (killed-but-still-holding-the-pipe-open on a platform quirk), stop
+	// waiting on its stdout after a bounded grace period instead of hanging
+	// the whole run past its own timeout.
+	cmd.WaitDelay = 5 * time.Second
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -822,6 +866,9 @@ func invokeProbes(ctx context.Context, stack, entry string, pc ProbeConfig, onFr
 			Detail: fmt.Sprintf("could not start probe: %v", err),
 		}}
 	}
+	kill, cleanupTree := newProcessTreeKiller(cmd)
+	treeKill = kill
+	defer cleanupTree()
 
 	var frags []model.ProbeFragment
 	scanner := bufio.NewScanner(stdout)

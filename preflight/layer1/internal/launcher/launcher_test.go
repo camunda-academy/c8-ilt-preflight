@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"c8preflight/internal/model"
@@ -513,6 +514,68 @@ func TestInvokeProbes_CrashStderrTruncation(t *testing.T) {
 	if !strings.Contains(got, "(truncated)") {
 		t.Error("Detail should still show the truncation marker -- the test's stderr is longer than the (generous) cap")
 	}
+}
+
+// TestInvokeProbes_TimeoutKillsWholeProcessTree guards against a real,
+// confirmed gap: os/exec's default kill-on-timeout only reaches the ONE
+// process it directly tracks (run.sh/run.cmd's own shell). The real work in a
+// tier-2 SDK install (dotnet restore, mvn, pip, npm) runs as a CHILD that
+// shell spawns, so a timeout that only kills the shell leaves the actual
+// fetch running orphaned in the background -- unaffected, and the script
+// logic that would have translated its eventual result into a JSON fragment
+// is already dead. Measured against a genuinely unreachable mirror: 35.8s
+// (dotnet/NuGet) to 2m15s (npm) before the underlying tool gives up on its
+// own, all far past any timeout budget a quick trust check should need.
+//
+// This test doesn't reproduce THAT scenario directly (no real network
+// dependency); it proves the mechanism a fix must have: a grandchild process
+// the entrypoint spawns must die together with it when the context expires.
+func TestInvokeProbes_TimeoutKillsWholeProcessTree(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "grandchild-survived")
+	entry := writeTreeSpawningProbe(t, marker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	_ = invokeProbes(ctx, "java", entry, ProbeConfig{Mode: "network"}, nil)
+
+	// The context expires at 300ms, long before the grandchild's own 4s sleep
+	// would finish on its own -- so waiting past that 4s and still finding no
+	// marker means it was actually killed, not just that this check ran too
+	// soon to notice an orphan that's still quietly running.
+	time.Sleep(6 * time.Second)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("grandchild process survived the probe's timeout and wrote its marker -- the process tree was not fully killed, only the tracked entrypoint")
+	}
+}
+
+// writeTreeSpawningProbe writes an entrypoint that immediately backgrounds a
+// grandchild (detached from the entrypoint's own process via `start /b` / a
+// shell `&`, matching how a real shell backgrounds work) and then itself
+// sleeps too. The grandchild writes markerPath only once its own short sleep
+// completes naturally -- which the test's context timeout (300ms) should
+// prevent it from ever reaching, if the whole tree is killed together.
+func writeTreeSpawningProbe(t *testing.T, markerPath string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "run.cmd")
+		script := "@echo off\r\n" +
+			"start /b \"\" cmd /c \"ping -n 5 127.0.0.1 >nul & echo done > " + markerPath + "\"\r\n" +
+			"ping -n 60 127.0.0.1 >nul\r\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "run.sh")
+	script := "#!/bin/sh\n" +
+		"(sleep 4; echo done > " + markerPath + ") &\n" +
+		"sleep 60\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // writeTestProbe writes a minimal standalone probe entrypoint (matching the

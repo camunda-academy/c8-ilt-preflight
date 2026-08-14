@@ -146,7 +146,10 @@ var checklistAction = map[model.ErrorClass]string{
 	model.ErrRuntimeAbsent: "This programming-language runtime isn't installed on this machine, so its check was " +
 		"skipped. Install it if your training group needs it for the exercises, then re-run.",
 	model.ErrProbeCrashed: "This specific check crashed before finishing — usually not something you caused. " +
-		"Re-run once; if it keeps crashing, contact the training team with this run's result file.",
+		"Re-run once. If it keeps crashing the same way, this can be your organization's antivirus or " +
+		"application-control software blocking the check rather than a bug — ask your IT/security team " +
+		"whether they see anything blocked around this time, since re-running won't help if so. Either way, " +
+		"contact the training team with this run's result file.",
 	model.ErrConnectionClosed: "The connection opened but then closed before finishing — this is NOT necessarily a " +
 		"firewall block (see whether a configuration note above explains it, e.g. a custom certificate setting). " +
 		"If nothing above explains it, contact the training team with this run's result file.",

@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleasesDir = Join-Path $ScriptDir "..\releases"
-$Version = if ($env:PREFLIGHT_VERSION) { $env:PREFLIGHT_VERSION } else { "0.2" }
+$Version = if ($env:PREFLIGHT_VERSION) { $env:PREFLIGHT_VERSION } else { "0.2.1" }
 
 New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
 Set-Location $ScriptDir
