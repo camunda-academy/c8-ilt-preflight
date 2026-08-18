@@ -101,6 +101,15 @@ public final class SdkProbe {
   }
 
   private static int run(String[] args) {
+    if (!Shared.hasClusterTarget()) {
+      System.out.println(Shared.fragment(
+          "sdk status", "FAIL", "CONFIG_ERROR",
+          "no cluster id configured -- set CAMUNDA_CLUSTER_ID (a UUID) or CAMUNDA_REST_ADDRESS with the cluster "
+              + "id in its path before running this probe standalone. The Go binary validates this before ever "
+              + "invoking a probe; running this file directly skips that check."));
+      return 1;
+    }
+
     Shared.RestBase restBase = Shared.normalizeRestBase();
     int exitCode = 0;
 

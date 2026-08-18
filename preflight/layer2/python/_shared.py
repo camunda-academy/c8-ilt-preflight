@@ -126,6 +126,40 @@ def resolve_api_host():
     return "%s.api.camunda.io" % region
 
 
+def cluster_edge_detail(status_code):
+    """Detail text for CLUSTER_EDGE_404 -- the catch-all for a status the SDK
+    reached the real cluster edge with but that isn't specifically handled
+    (503 and 401 get their own classifications). Same wording as the Go
+    binary's status.go and the Java/C# SDK probes, so the message reads
+    identically regardless of which check produced it."""
+    return (
+        "reached the cluster edge (HTTP %d) but got no valid cluster route -- this typically means our shared "
+        "preflight cluster is paused or in a transient edge blip, NOT a problem with your network. Re-run in "
+        "~5 minutes; if it persists, contact the training team." % status_code
+    )
+
+
+def has_cluster_target():
+    """Whether enough config exists to build a REST base with an actual
+    cluster route -- CAMUNDA_REST_ADDRESS carries a UUID somewhere in its
+    path, or CAMUNDA_CLUSTER_ID is one itself.
+
+    Mirrors the Go binary's own hostset.Resolve validation. That check runs
+    before the binary ever invokes a probe, so it normally catches a missing
+    cluster id before any Layer 2 code executes at all -- but this file is
+    also runnable standalone, which bypasses it. Without this, normalize_rest_base()
+    below silently falls back to a bare https://<region>.api.camunda.io with no
+    cluster path, and the SDK's resulting 404 reads as a transient cluster
+    problem instead of a missing --cluster-id/--host.
+    """
+    raw = os.environ.get("CAMUNDA_REST_ADDRESS", "").strip()
+    if raw:
+        for seg in raw.split("/"):
+            if _UUID_RE.match(seg):
+                return True
+    return bool(_UUID_RE.match(os.environ.get("CAMUNDA_CLUSTER_ID", "").strip()))
+
+
 def normalize_rest_base():
     """Rebuild a canonical https://<host>/<clusterId> REST base, mirroring the
     Go binary's hostset.parseExplicitHost tolerance (UUID-anywhere-in-path +

@@ -40,9 +40,11 @@ import sys
 
 from _shared import (
     classify_transport_error,
+    cluster_edge_detail,
     crash_fragment,
     eprint,
     fragment,
+    has_cluster_target,
     is_verbose,
     normalize_rest_base,
     resolve_is_full,
@@ -195,6 +197,14 @@ def run_checks(sdk_mod, sdk_errors):
     # false-red 404. When the raw form needed fixing we still WARN, because a
     # participant hand-configuring the SDK from that same Console string would
     # hit the identical opaque 404.
+    if not has_cluster_target():
+        fragments.append(fragment(
+            "sdk status", "FAIL", "CONFIG_ERROR",
+            "no cluster id configured -- set CAMUNDA_CLUSTER_ID (a UUID) or CAMUNDA_REST_ADDRESS with the "
+            "cluster id in its path before running this probe standalone. The Go binary validates this before "
+            "ever invoking a probe; running this file directly skips that check."))
+        return fragments
+
     rest_base, host, was_normalized = normalize_rest_base()
     # Emit the normalization notice only in verbose mode: it's useful to the
     # operator/trainer but confusing noise for a participant (the normalization
@@ -250,7 +260,7 @@ def run_checks(sdk_mod, sdk_errors):
                                    "cluster reachable but unhealthy (503) — likely our shared preflight cluster, "
                                    "not your network: %s" % e, store_label))
     except sdk_errors.UnexpectedStatus as e:
-        fragments.append(fragment(target, "FAIL", "UNEXPECTED_HTTP_STATUS", "unexpected HTTP status: %s" % e, store_label))
+        fragments.append(fragment(target, "FAIL", "CLUSTER_EDGE_404", cluster_edge_detail(e.status_code), store_label))
     except Exception as e:
         error_class, detail = classify_transport_error(e)
         fragments.append(fragment(target, "FAIL", error_class, detail, store_label))
@@ -276,7 +286,7 @@ def run_checks(sdk_mod, sdk_errors):
             fragments.append(fragment(topology_target, "FAIL", "TOPOLOGY_AUTH_FAIL",
                                        "authenticated topology request rejected (401): %s" % e, store_label))
         except sdk_errors.UnexpectedStatus as e:
-            fragments.append(fragment(topology_target, "FAIL", "UNEXPECTED_HTTP_STATUS", "unexpected HTTP status: %s" % e, store_label))
+            fragments.append(fragment(topology_target, "FAIL", "CLUSTER_EDGE_404", cluster_edge_detail(e.status_code), store_label))
         except Exception as e:
             error_class, detail = classify_transport_error(e)
             fragments.append(fragment(topology_target, "FAIL", error_class, detail, store_label))

@@ -131,6 +131,16 @@ catch (Exception ex)
 
 async Task<int> RunAsync(string[] a)
 {
+    if (!Shared.HasClusterTarget())
+    {
+        Console.WriteLine(Shared.EmitFragment(
+            "sdk status", "FAIL", "CONFIG_ERROR",
+            "no cluster id configured -- set CAMUNDA_CLUSTER_ID (a UUID) or CAMUNDA_REST_ADDRESS with the " +
+            "cluster id in its path before running this probe standalone. The Go binary validates this before " +
+            "ever invoking a probe; running this file directly skips that check."));
+        return 1;
+    }
+
     var restBase = Shared.NormalizeRestBase();
     var exitCode = 0;
 

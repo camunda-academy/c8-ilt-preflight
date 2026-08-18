@@ -198,6 +198,29 @@ final class Shared {
       Pattern.compile(
           "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", Pattern.CASE_INSENSITIVE);
 
+  /** Whether enough config exists to build a REST base with an actual cluster
+   * route -- CAMUNDA_REST_ADDRESS carries a UUID somewhere in its path, or
+   * CAMUNDA_CLUSTER_ID is one itself.
+   *
+   * Mirrors the Go binary's own hostset.Resolve validation. That check runs
+   * before the binary ever invokes a probe, so it normally catches a missing
+   * cluster id before any Layer 2 code executes at all -- but this file is
+   * also runnable standalone, which bypasses it. Without this, normalizeRestBase()
+   * below silently falls back to a bare https://&lt;region&gt;.api.camunda.io
+   * with no cluster path, and the SDK's resulting 404 reads as a transient
+   * cluster problem instead of a missing --cluster-id/--host. */
+  static boolean hasClusterTarget() {
+    String raw = envOrEmpty("CAMUNDA_REST_ADDRESS");
+    if (!raw.isEmpty()) {
+      for (String seg : raw.split("/")) {
+        if (UUID_RE.matcher(seg).matches()) {
+          return true;
+        }
+      }
+    }
+    return UUID_RE.matcher(envOrEmpty("CAMUNDA_CLUSTER_ID")).matches();
+  }
+
   /** Rebuild a canonical https://&lt;host&gt;/&lt;clusterId&gt; REST base,
    * mirroring the Go binary's hostset.parseExplicitHost tolerance (UUID-
    * anywhere-in-path + authority-port stripping) and Python's

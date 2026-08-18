@@ -107,10 +107,12 @@ const { execFileSync } = require('child_process');
 const {
   buildTrustContext,
   classifyTransportError,
+  clusterEdgeDetail,
   crashFragment,
   eprint,
   fragment,
   getProxyUrl,
+  hasClusterTarget,
   isVerbose,
   maskProxy,
   normalizeRestBase,
@@ -236,7 +238,7 @@ function classifySdkFailure(target, e, storeLabel, stage) {
     if (stage === 'topology' && status === 401) {
       return fragment(target, 'FAIL', 'TOPOLOGY_AUTH_FAIL', 'authenticated topology request rejected (401): ' + e.message, storeLabel);
     }
-    return fragment(target, 'FAIL', 'UNEXPECTED_HTTP_STATUS', 'unexpected HTTP status ' + status + ': ' + e.message, storeLabel);
+    return fragment(target, 'FAIL', 'CLUSTER_EDGE_404', clusterEdgeDetail(status), storeLabel);
   }
   if (name === 'CancelSdkError') {
     return fragment(
@@ -257,6 +259,17 @@ async function runChecks(sdkModule) {
   const trust = buildTrustContext();
   const storeLabel = trust.label;
   if (trust.warn) fragments.push(trust.warn);
+
+  if (!hasClusterTarget()) {
+    fragments.push(fragment(
+      'sdk status', 'FAIL', 'CONFIG_ERROR',
+      'no cluster id configured -- set CAMUNDA_CLUSTER_ID (a UUID) or CAMUNDA_REST_ADDRESS with the cluster ' +
+      'id in its path before running this probe standalone. The Go binary validates this before ever invoking ' +
+      'a probe; running this file directly skips that check.',
+      storeLabel
+    ));
+    return fragments;
+  }
 
   // Normalize the REST base the same way the Go binary and the Python/Java
   // probes do -- see _shared.js's normalizeRestBase doc comment for the
