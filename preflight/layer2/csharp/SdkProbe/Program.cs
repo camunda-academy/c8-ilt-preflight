@@ -274,8 +274,10 @@ async Task<int> RunAsync(string[] a)
         if (!isFull)
         {
             // network mode: credential-free, topology omitted (no line), like Go.
+            return exitCode;
         }
-        else if (!hasCreds)
+
+        if (!hasCreds)
         {
             Console.WriteLine(Shared.EmitFragment(
                 topologyTarget,

@@ -381,7 +381,10 @@ async function runChecks(sdkModule) {
     const topologyTarget = host + ' (sdk topology)';
     if (!isFull) {
       // network mode: credential-free, topology omitted (no line), like Go.
-    } else if (!hasCreds) {
+      return fragments;
+    }
+
+    if (!hasCreds) {
       fragments.push(
         fragment(
           topologyTarget,

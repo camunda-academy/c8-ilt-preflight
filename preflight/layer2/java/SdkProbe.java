@@ -276,7 +276,10 @@ public final class SdkProbe {
       if (!isFull) {
         // Network mode: credential-free by design (matches the Go binary and
         // the Python probe) -- omit entirely, no line at all, not even SKIP.
-      } else if (!hasCreds) {
+        return exitCode;
+      }
+
+      if (!hasCreds) {
         System.out.println(
             Shared.fragment(
                 topologyTarget,
