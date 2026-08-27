@@ -23,7 +23,7 @@ import (
 )
 
 // ToolVersion is overridable at build time via -ldflags "-X main.ToolVersion=x.y.z".
-var ToolVersion = "0.2.1"
+var ToolVersion = "1.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
