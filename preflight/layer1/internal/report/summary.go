@@ -62,6 +62,7 @@ const (
 // every language.
 var shortFailHeadline = map[model.ErrorClass]string{
 	model.ErrDNSFail:               "DNS resolution failed",
+	model.ErrDNSViaProxyWarn:       "no local DNS — continuing via proxy",
 	model.ErrConnectRefused:        "connection refused",
 	model.ErrConnectTimeout:        "connection timed out",
 	model.ErrTLSHandshakeFail:      "TLS handshake failed",
@@ -106,6 +107,9 @@ var checklistAction = map[model.ErrorClass]string{
 	model.ErrDNSFail: "Try a different network (e.g. a mobile hotspot) to see if the problem follows you. " +
 		"If it does, ask your network/IT team whether their DNS resolver can reach public internet " +
 		"addresses — some corporate networks block or filter DNS lookups.",
+	model.ErrDNSViaProxyWarn: "Nothing to fix for the proxied path — this machine can't look the name up itself, but the " +
+		"proxy does that for you, and the checks for this host ran through it. Make sure every training tool " +
+		"(IDE, build tool, SDK) uses the same proxy: anything that tries to connect directly will fail here.",
 	model.ErrConnectRefused: "If this network has a corporate proxy, re-run with --proxy http://<proxy-host>:<port> " +
 		"(or set HTTPS_PROXY). If that fixes it, point your training tools at the same proxy — this isn't a " +
 		"firewall ticket. If it still fails, ask your network team to allow outbound HTTPS (port 443) to this host.",

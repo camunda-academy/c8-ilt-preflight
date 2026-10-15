@@ -108,7 +108,15 @@ if not !ERRORLEVEL!==0 set RC=1
 
 rem --- Tier 2: real SDK confirmation (optional -- probe_sdk.js handles its
 rem own opt-in `npm ci` against the committed, hash-verified lockfile). ---
+rem A custom CA reaches the SDK only through NODE_EXTRA_CA_CERTS: the SDK's own
+rem CAMUNDA_MTLS_CA_PATH handling builds an agent that Node's fetch ignores
+rem (see probe_sdk.js's module doc comment). Node reads the variable once at
+rem startup, so it has to be in this node process's environment. Set here,
+rem after tier 1 already ran, so it reaches tier 2 only -- tier 1 checks the CA
+rem by itself through tls.connect. A NODE_EXTRA_CA_CERTS the user already set is
+rem kept, not overwritten; probe_sdk.js reports which file it ended up using.
 if "!TIER2_SUPPORTED!"=="1" (
+  if defined CAMUNDA_MTLS_CA_PATH if not defined NODE_EXTRA_CA_CERTS set "NODE_EXTRA_CA_CERTS=!CAMUNDA_MTLS_CA_PATH!"
   call "!NODEEXE!" "%DIR%probe_sdk.js" %*
   if not !ERRORLEVEL!==0 set RC=1
 ) else (

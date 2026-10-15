@@ -1,11 +1,31 @@
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -446,6 +466,514 @@ final class Shared {
         "Both --java-truststore and --trust-ca (CAMUNDA_CA_CERTIFICATE_PATH) are set for Java -- only "
             + "--trust-ca takes effect in that case, so your --java-truststore file is being silently "
             + "ignored. Use one or the other, not both.");
+  }
+
+  // ---- Maven: proxy settings and trust store ----
+  //
+  // Maven reads neither HTTPS_PROXY/HTTP_PROXY nor this tool's --trust-ca. Its
+  // proxy comes only from <proxies> in a settings.xml, and its TLS trust only
+  // from the JVM it runs on. These helpers translate both into what Maven does
+  // read, for the settings files and mvn processes the probes generate.
+
+  static boolean isWindows() {
+    return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+  }
+
+  /** Maven 3.9's default HTTP transport sends proxy credentials on the first
+   * CONNECT tunnel only; the further tunnels a dependency download opens go
+   * out without them, an authenticating proxy answers 407, and the build
+   * fails. The wagon transport authenticates every tunnel. Returns the mvn
+   * argument selecting it when the configured proxy carries credentials,
+   * otherwise an empty list. */
+  static List<String> mavenProxyAuthTransportArgs() {
+    ProxyParts proxy = parseProxyUrl(getProxyUrl());
+    List<String> args = new ArrayList<>();
+    if (proxy != null && proxy.username != null) {
+      args.add("-Dmaven.resolver.transport=wagon");
+    }
+    return args;
+  }
+
+  /** Guidance for a Maven run on the operator's OWN settings that failed with
+   * a proxy 407 -- see mavenProxyAuthTransportArgs for the cause. */
+  static String mavenProxyAuthHint(String mvnOutput) {
+    if (mvnOutput == null || !mvnOutput.contains("407")) {
+      return "";
+    }
+    return " Maven got HTTP 407 from the proxy. If your settings.xml already has the proxy credentials, this "
+        + "is likely Maven 3.9's default HTTP transport, which authenticates only the first tunnel through an "
+        + "authenticating proxy: add -Dmaven.resolver.transport=wagon to MAVEN_OPTS or to the project's "
+        + ".mvn/maven.config.";
+  }
+
+  /** A proxy URL split into the parts a Maven &lt;proxy&gt; entry takes.
+   * username/password are already percent-decoded, null when absent. */
+  static final class ProxyParts {
+    final String host;
+    final int port;
+    final String username;
+    final String password;
+
+    ProxyParts(String host, int port, String username, String password) {
+      this.host = host;
+      this.port = port;
+      this.username = username;
+      this.password = password;
+    }
+  }
+
+  /** Splits a proxy URL by hand rather than through java.net.URI: URI rejects
+   * a password containing characters such as '&lt;', '"' or a bare '%', and
+   * people do paste unencoded passwords into HTTPS_PROXY. The userinfo ends at
+   * the LAST '@', so an unencoded '@' inside the password still parses.
+   * Percent-escapes are decoded (the URL convention for special characters);
+   * a '%' not followed by two hex digits is kept literally. Returns null when
+   * no usable host/port can be extracted. Without a port, the scheme's default
+   * is used (http 80, https 443), the same rule Probe.connectViaProxy applies. */
+  static ProxyParts parseProxyUrl(String url) {
+    if (url == null || url.trim().isEmpty()) {
+      return null;
+    }
+    String s = url.trim();
+    String scheme = "http";
+    int sep = s.indexOf("://");
+    if (sep >= 0) {
+      scheme = s.substring(0, sep).toLowerCase(Locale.ROOT);
+      s = s.substring(sep + 3);
+    }
+    String user = null;
+    String pass = null;
+    int at = s.lastIndexOf('@');
+    if (at >= 0) {
+      String userInfo = s.substring(0, at);
+      s = s.substring(at + 1);
+      int colon = userInfo.indexOf(':');
+      user = percentDecode(colon >= 0 ? userInfo.substring(0, colon) : userInfo);
+      if (colon >= 0) {
+        pass = percentDecode(userInfo.substring(colon + 1));
+      }
+      if (user.isEmpty()) {
+        user = null;
+      }
+    }
+    int end = s.length();
+    for (char c : new char[] {'/', '?', '#'}) {
+      int i = s.indexOf(c);
+      if (i >= 0 && i < end) {
+        end = i;
+      }
+    }
+    String hostPort = s.substring(0, end);
+    String host;
+    String portStr = "";
+    if (hostPort.startsWith("[")) {
+      int rb = hostPort.indexOf(']');
+      if (rb < 0) {
+        return null;
+      }
+      host = hostPort.substring(1, rb);
+      String rest = hostPort.substring(rb + 1);
+      if (rest.startsWith(":")) {
+        portStr = rest.substring(1);
+      }
+    } else {
+      int colon = hostPort.lastIndexOf(':');
+      host = colon >= 0 ? hostPort.substring(0, colon) : hostPort;
+      portStr = colon >= 0 ? hostPort.substring(colon + 1) : "";
+    }
+    if (host.isEmpty()) {
+      return null;
+    }
+    int port = scheme.equals("https") ? 443 : 80;
+    if (!portStr.isEmpty()) {
+      try {
+        port = Integer.parseInt(portStr);
+      } catch (NumberFormatException e) {
+        return null;
+      }
+      if (port < 1 || port > 65535) {
+        return null;
+      }
+    }
+    return new ProxyParts(host, port, user, pass);
+  }
+
+  /** host:port of a proxy URL for messages -- built from the parsed parts, so
+   * no credential can survive into it even when an unencoded password
+   * contains '@' or '/' and defeats the regex in scrubUrlCreds. */
+  static String proxyDisplay(String url) {
+    ProxyParts p = parseProxyUrl(url);
+    if (p == null) {
+      return "(unparseable proxy URL)";
+    }
+    String host = p.host.contains(":") ? "[" + p.host + "]" : p.host;
+    return host + ":" + p.port + (p.username != null ? " with credentials" : "");
+  }
+
+  private static String percentDecode(String s) {
+    byte[] raw = s.getBytes(StandardCharsets.UTF_8);
+    ByteArrayOutputStream out = new ByteArrayOutputStream(raw.length);
+    for (int i = 0; i < raw.length; i++) {
+      int hi = i + 2 < raw.length ? Character.digit(raw[i + 1], 16) : -1;
+      int lo = i + 2 < raw.length ? Character.digit(raw[i + 2], 16) : -1;
+      if (raw[i] == '%' && hi >= 0 && lo >= 0) {
+        out.write(hi * 16 + lo);
+        i += 2;
+      } else {
+        out.write(raw[i]);
+      }
+    }
+    return new String(out.toByteArray(), StandardCharsets.UTF_8);
+  }
+
+  /** Translates a NO_PROXY list into Maven's nonProxyHosts syntax ('|'
+   * separated, '*' wildcards). A NO_PROXY domain entry conventionally covers
+   * the domain and its subdomains, so "example.com" and ".example.com" both
+   * become "example.com|*.example.com". Ports are dropped (Maven matches host
+   * names only) and CIDR ranges are skipped, since Maven has no equivalent. */
+  static String mavenNonProxyHosts(String noProxy) {
+    if (noProxy == null) {
+      return "";
+    }
+    List<String> out = new ArrayList<>();
+    for (String raw : noProxy.split(",")) {
+      String h = raw.trim();
+      if (h.isEmpty() || h.contains("/") || h.contains("|")) {
+        continue;
+      }
+      if (h.startsWith("[")) {
+        int rb = h.indexOf(']');
+        if (rb < 0) {
+          continue;
+        }
+        h = h.substring(1, rb);
+      } else if (h.indexOf(':') >= 0 && h.indexOf(':') == h.lastIndexOf(':')) {
+        h = h.substring(0, h.indexOf(':'));
+      }
+      if (h.startsWith("*.")) {
+        h = h.substring(2);
+      } else if (h.startsWith(".")) {
+        h = h.substring(1);
+      }
+      if (h.isEmpty()) {
+        continue;
+      }
+      out.add(h);
+      boolean isAddress = h.matches("[0-9.]+") || h.contains(":");
+      if (h.contains(".") && !h.contains("*") && !isAddress) {
+        out.add("*." + h);
+      }
+    }
+    return String.join("|", out);
+  }
+
+  /** The &lt;proxies&gt; block for the given proxy, or "" when there is none.
+   * Two entries, one per protocol, pointing at the same proxy: Maven picks a
+   * proxy by the repository URL's protocol, so a single entry would leave
+   * either http or https repositories unproxied. Every value is XML-escaped --
+   * a proxy password can legitimately contain '&amp;', '&lt;' or quotes. */
+  static String mavenProxiesXml(ProxyParts p, String nonProxyHosts) {
+    if (p == null) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder("<proxies>");
+    for (String protocol : new String[] {"https", "http"}) {
+      sb.append("<proxy><id>c8-preflight-").append(protocol).append("</id><active>true</active>");
+      sb.append("<protocol>").append(protocol).append("</protocol>");
+      sb.append("<host>").append(xmlEscape(p.host)).append("</host>");
+      sb.append("<port>").append(p.port).append("</port>");
+      if (p.username != null) {
+        sb.append("<username>").append(xmlEscape(p.username)).append("</username>");
+      }
+      if (p.password != null) {
+        sb.append("<password>").append(xmlEscape(p.password)).append("</password>");
+      }
+      if (nonProxyHosts != null && !nonProxyHosts.isEmpty()) {
+        sb.append("<nonProxyHosts>").append(xmlEscape(nonProxyHosts)).append("</nonProxyHosts>");
+      }
+      sb.append("</proxy>");
+    }
+    sb.append("</proxies>");
+    return sb.toString();
+  }
+
+  /** The proxy from HTTPS_PROXY/HTTP_PROXY as a &lt;proxies&gt; block (with
+   * NO_PROXY as nonProxyHosts), or "" when no usable proxy is configured. */
+  static String mavenProxiesXmlFromEnv() {
+    String noProxy = System.getenv("NO_PROXY");
+    if (noProxy == null || noProxy.isEmpty()) {
+      noProxy = System.getenv("no_proxy");
+    }
+    return mavenProxiesXml(parseProxyUrl(getProxyUrl()), mavenNonProxyHosts(noProxy));
+  }
+
+  /** A settings.xml with no mirrors and no profiles -- plain Maven Central --
+   * plus the given &lt;proxies&gt; block (may be ""). */
+  static String centralSettingsXml(String proxiesXml) {
+    return "<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\">"
+        + (proxiesXml == null ? "" : proxiesXml)
+        + "<mirrors></mirrors><profiles></profiles></settings>";
+  }
+
+  static String xmlEscape(String s) {
+    return s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;");
+  }
+
+  /** A temp directory for files handed to Maven. Files.createTempDirectory
+   * creates it owner-only (0700 on POSIX; under the per-user profile on
+   * Windows), which matters because a generated settings.xml can hold the
+   * proxy password.
+   *
+   * <p>The trust-store path ends up inside MAVEN_OPTS, which the POSIX `mvn`
+   * script word-splits without honoring quotes, so on POSIX a temp path with
+   * whitespace is retried under /tmp and refused if that has whitespace too.
+   * mvn.cmd passes MAVEN_OPTS through to java.exe, which does honor quotes
+   * (see MavenTrust.mavenOpts). */
+  static Path createMavenTempDir(String prefix) throws IOException {
+    Path dir = Files.createTempDirectory(prefix);
+    if (isWindows() || !hasWhitespace(dir.toString())) {
+      return dir;
+    }
+    deleteTree(dir);
+    dir = Files.createTempDirectory(Paths.get("/tmp"), prefix);
+    if (hasWhitespace(dir.toString())) {
+      deleteTree(dir);
+      throw new IOException("no temp directory without whitespace in its path is available, and "
+          + "MAVEN_OPTS cannot carry such a path");
+    }
+    return dir;
+  }
+
+  private static boolean hasWhitespace(String s) {
+    for (int i = 0; i < s.length(); i++) {
+      if (Character.isWhitespace(s.charAt(i))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static void deleteTree(Path dir) {
+    if (dir == null) {
+      return;
+    }
+    try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+      walk.sorted(Comparator.reverseOrder())
+          .forEach(
+              p -> {
+                try {
+                  Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                  // best effort -- a leftover temp file holds no secret beyond
+                  // what the operator's own environment already contains
+                }
+              });
+    } catch (IOException ignored) {
+      // directory already gone
+    }
+  }
+
+  /** The trust store a Maven child process is started with, if any.
+   *
+   * <p>file == null means Maven runs on its JVM's own default trust store,
+   * either because nothing was configured or because building the store
+   * failed (then problem says why). label is a short, plain-language
+   * description for fragment details. */
+  static final class MavenTrust {
+    // A trust store holds only public certificates, so its password protects
+    // nothing; it exists because the keystore format wants one.
+    static final String PASSWORD = "changeit";
+
+    final Path dir;
+    final Path file;
+    final String label;
+    final String problem;
+
+    MavenTrust(Path dir, Path file, String label, String problem) {
+      this.dir = dir;
+      this.file = file;
+      this.label = label;
+      this.problem = problem;
+    }
+
+    boolean isCustom() {
+      return file != null;
+    }
+
+    /** existing MAVEN_OPTS (may be null/empty) with the trust-store system
+     * properties appended. Appended, not prepended: for a repeated -D the JVM
+     * keeps the last one, so these win over a trust store set there already,
+     * while every other option the operator put in MAVEN_OPTS is kept. */
+    String mavenOpts(String existing) {
+      if (file == null) {
+        return existing;
+      }
+      String path = file.toString();
+      if (isWindows() && hasWhitespace(path)) {
+        path = "\"" + path + "\"";
+      }
+      String opts = "-Djavax.net.ssl.trustStore=" + path
+          + " -Djavax.net.ssl.trustStorePassword=" + PASSWORD
+          + " -Djavax.net.ssl.trustStoreType=JKS";
+      return existing == null || existing.trim().isEmpty() ? opts : existing + " " + opts;
+    }
+
+    /** Environment overrides for a Maven child process: MAVEN_OPTS only. */
+    Map<String, String> env() {
+      Map<String, String> env = new HashMap<>();
+      if (file != null) {
+        env.put("MAVEN_OPTS", mavenOpts(System.getenv("MAVEN_OPTS")));
+      }
+      return env;
+    }
+
+    void cleanup() {
+      deleteTree(dir);
+    }
+  }
+
+  /** Builds the trust store Maven child processes should use, from the same
+   * env vars the Java probes read, in the same precedence as Probe:
+   *
+   * <ul>
+   *   <li>CAMUNDA_CA_CERTIFICATE_PATH (--trust-ca), else CAMUNDA_MTLS_CA_PATH:
+   *       the JDK's default CAs PLUS the certificates in that PEM file. Appended,
+   *       not replaced as in the SDK: Maven reaches repositories that may well
+   *       not sit behind the intercepting proxy, and those still need the
+   *       public CAs.
+   *   <li>CAMUNDA_JAVA_TRUSTSTORE (--java-truststore): the certificates of that
+   *       store, as they are.
+   * </ul>
+   *
+   * <p>The result is always a fresh JKS file in a temp directory, also for
+   * --java-truststore: re-writing it keeps the operator's own path (which may
+   * contain spaces) and password out of MAVEN_OPTS, and JKS is the one format
+   * every JVM Maven may run on can read -- a PKCS12 file written by a current
+   * JDK uses algorithms older Java 8 updates cannot load. */
+  static MavenTrust prepareMavenTrust() {
+    String caPath = envOrEmpty("CAMUNDA_CA_CERTIFICATE_PATH");
+    String tsPath = envOrEmpty("CAMUNDA_JAVA_TRUSTSTORE");
+    if (caPath.isEmpty() && tsPath.isEmpty()) {
+      caPath = envOrEmpty("CAMUNDA_MTLS_CA_PATH");
+    }
+    String defaultLabel = "the default trust store of the JDK Maven runs on";
+    if (caPath.isEmpty() && tsPath.isEmpty()) {
+      return new MavenTrust(null, null, defaultLabel, null);
+    }
+    boolean fromCa = !caPath.isEmpty();
+    String source = fromCa
+        ? "your --trust-ca certificate (" + caPath + ")"
+        : "your --java-truststore file (" + tsPath + ")";
+    Path dir = null;
+    try {
+      KeyStore ks = KeyStore.getInstance("JKS");
+      ks.load(null, null);
+      String label;
+      if (fromCa) {
+        int defaults = addDefaultCas(ks);
+        int added = addPemCertificates(ks, caPath);
+        label = "the JDK's " + defaults + " default CAs plus " + added + " certificate"
+            + (added == 1 ? "" : "s") + " from " + source;
+      } else {
+        java.io.File f = new java.io.File(tsPath);
+        if (!f.isFile()) {
+          throw new IOException("the file does not exist");
+        }
+        if (looksLikePem(f)) {
+          throw new IOException("it is a PEM certificate, not a JKS/PKCS12 keystore -- pass a PEM with "
+              + "--trust-ca instead");
+        }
+        int copied = copyCertificates(f, envOrEmpty("CAMUNDA_JAVA_TRUSTSTORE_PASSWORD"), ks);
+        label = "the " + copied + " certificate" + (copied == 1 ? "" : "s") + " in " + source;
+      }
+      dir = createMavenTempDir("c8-maven-trust");
+      Path file = dir.resolve("truststore.jks");
+      try (OutputStream out = Files.newOutputStream(file)) {
+        ks.store(out, MavenTrust.PASSWORD.toCharArray());
+      }
+      return new MavenTrust(dir, file, label, null);
+    } catch (Exception e) {
+      deleteTree(dir);
+      return new MavenTrust(null, null, defaultLabel,
+          "could not hand " + source + " to Maven, so Maven ran with " + defaultLabel + ": "
+              + describeThrowable(e));
+    }
+  }
+
+  /** Adds every CA the JVM's default trust manager accepts -- the JDK's
+   * cacerts (or jssecacerts, when present), exactly what an unconfigured JVM
+   * trusts. */
+  private static int addDefaultCas(KeyStore ks) throws Exception {
+    TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+    tmf.init((KeyStore) null);
+    int n = 0;
+    for (TrustManager tm : tmf.getTrustManagers()) {
+      if (tm instanceof X509TrustManager) {
+        for (X509Certificate c : ((X509TrustManager) tm).getAcceptedIssuers()) {
+          ks.setCertificateEntry("default-" + n, c);
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  private static int addPemCertificates(KeyStore ks, String pemPath) throws Exception {
+    Collection<? extends Certificate> certs;
+    try (InputStream in = Files.newInputStream(Paths.get(pemPath))) {
+      certs = CertificateFactory.getInstance("X.509").generateCertificates(in);
+    }
+    if (certs.isEmpty()) {
+      throw new IOException("no certificate found in " + pemPath);
+    }
+    int n = 0;
+    for (Certificate c : certs) {
+      ks.setCertificateEntry("custom-" + n, c);
+      n++;
+    }
+    return n;
+  }
+
+  /** Copies the trusted-certificate entries of an existing JKS/PKCS12 store --
+   * the only entries a JSSE trust manager uses. An empty password means none,
+   * as with javax.net.ssl.trustStorePassword left unset. A password that does
+   * not match is retried without one: on a pure trust store the password only
+   * guards an integrity check, and the certificates load without it. */
+  private static int copyCertificates(java.io.File src, String password, KeyStore dst) throws Exception {
+    KeyStore in;
+    boolean passwordRejected = false;
+    try {
+      in = KeyStore.getInstance(src, password.isEmpty() ? null : password.toCharArray());
+    } catch (IOException e) {
+      if (password.isEmpty()) {
+        throw e;
+      }
+      in = KeyStore.getInstance(src, (char[]) null);
+      passwordRejected = true;
+    }
+    int n = 0;
+    for (Enumeration<String> aliases = in.aliases(); aliases.hasMoreElements(); ) {
+      String alias = aliases.nextElement();
+      if (in.isCertificateEntry(alias)) {
+        dst.setCertificateEntry("store-" + n, in.getCertificate(alias));
+        n++;
+      }
+    }
+    if (n == 0) {
+      // A PKCS12 store usually encrypts its certificates too, so without the
+      // right password none can be read.
+      throw new IOException(passwordRejected
+          ? "the --java-truststore-password does not match this store, and without it no certificate can be read"
+          : password.isEmpty()
+              ? "no trusted certificate could be read -- if the store has a password, pass it with "
+                  + "--java-truststore-password"
+              : "the store holds no trusted certificates");
+    }
+    return n;
   }
 
   static String envOrEmpty(String name) {

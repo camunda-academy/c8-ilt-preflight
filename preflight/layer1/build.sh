@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASES_DIR="$SCRIPT_DIR/../releases"
-VERSION="${PREFLIGHT_VERSION:-1.0}"
+VERSION="${PREFLIGHT_VERSION:-1.0.1}"
 
 mkdir -p "$RELEASES_DIR"
 cd "$SCRIPT_DIR"
@@ -27,7 +27,7 @@ for target in "${TARGETS[@]}"; do
   read -r goos goarch ext <<< "$target"
   out="preflight-${goos}-${goarch}${ext}"
   echo "Building $out ..."
-  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
     -ldflags "-s -w -X main.ToolVersion=${VERSION}" \
     -o "$RELEASES_DIR/$out" ./cmd/preflight
 done

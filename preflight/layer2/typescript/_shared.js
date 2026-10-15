@@ -71,11 +71,12 @@ function isVerbose() {
 }
 
 /**
- * Opt-in switch for probe_sdk.js's proxy-tunneling `fetch` override (see
- * tunneledFetch in probe_sdk.js). OFF by default -- the real SDK's own
- * `fetch` has zero proxy handling and silently connects direct, which is
- * exactly what this tool's default behavior mirrors on purpose (matching
- * what a training group's own unmodified job-worker code would do). Set
+ * Opt-in switch for probe_sdk.js's undici ProxyAgent (see
+ * installProxyDispatcher in probe_sdk.js). OFF by default -- the real SDK has
+ * no proxy handling and Node's fetch connects direct unless Node's built-in
+ * proxy support is switched on, which is exactly what this tool's default
+ * behavior mirrors on purpose (matching what a training group's own
+ * unmodified job-worker code would do). Set
  * CAMUNDA_TS_PROXY_SUPPORT=1 (forwarded from the Go binary's
  * --ts-proxy-support) or pass --ts-proxy-support standalone to opt into the
  * tunneled check instead -- at the cost of no longer testing the real SDK's
@@ -339,11 +340,8 @@ function classifyTransportError(err) {
 
 /**
  * Raw plain-TCP connect with a manual timeout (net.Socket has no built-in
- * connect timeout for a 'connect' event that never fires). Shared by both
- * probe.js's own tier-1 checks AND probe_sdk.js's proxy-aware fetch override
- * (see connectViaProxy/tlsHandshake below) -- moved here rather than kept
- * private to probe.js so the two probes never carry two independently-
- * drifting copies of the exact same socket/tunnel/trust logic.
+ * connect timeout for a 'connect' event that never fires). Used by probe.js's
+ * tier-1 checks, directly and through connectViaProxy below.
  */
 function connectPlain(host, port, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -382,13 +380,10 @@ class ProxyError extends Error {
 /**
  * Opens an HTTP CONNECT tunnel through proxyUrl to host:port -- raw socket,
  * manual CONNECT handshake, Basic proxy-auth from the URL's userinfo,
- * upgrading to TLS only after the tunnel is established. Node's
- * tls.connect()/https/global fetch do NOT auto-tunnel through
- * HTTPS_PROXY/HTTP_PROXY, and the real SDK itself has
- * ZERO proxy-env-var handling of its own -- this manual tunnel is the only
- * way this project's proxy support works for Node at all, for either tier
- * (probe_sdk.js's proxy-aware fetch override reuses this exact function so
- * tier 2 stops silently bypassing --proxy the way global fetch does).
+ * upgrading to TLS only after the tunnel is established. Node's tls.connect()
+ * never tunnels through HTTPS_PROXY/HTTP_PROXY (only fetch and http/https do,
+ * and only with Node's built-in proxy support switched on), so tier 1 opens
+ * the tunnel itself. Tier 2 does not use this: the SDK goes through fetch.
  */
 function connectViaProxy(proxyUrl, host, port, timeoutMs) {
   return new Promise((resolve, reject) => {
@@ -483,14 +478,12 @@ function tlsHandshake(rawSocket, host, trust, timeoutMs) {
 /**
  * Bundles the trust material (`ca: undefined` means Node's own default
  * store) with a human-readable label, plus an optional pre-formed WARN
- * fragment (e.g. an unreadable custom-CA file). Shared by probe.js's tier-1
- * checks and probe_sdk.js's proxy-aware fetch override -- both tiers must
- * make the IDENTICAL trust decision for the same CAMUNDA_MTLS_CA_PATH value,
- * or Layer 2 re-introduces the exact false-green this whole probe exists to
- * prevent. REPLACE, not append -- verified against the real SDK's own
- * published source (see probe.js's module doc comment for the full
- * reasoning): once a custom CA is
- * set, ONLY that CA is trusted, not "OS store + custom CA".
+ * fragment (e.g. an unreadable custom-CA file). Used by probe.js's tier-1
+ * handshake and by probe_sdk.js's --ts-proxy-support ProxyAgent
+ * (requestTls.ca). In both, `ca` REPLACES the default store: once a custom CA
+ * is set, ONLY that CA is trusted, not "default store + custom CA" -- see
+ * probe.js's module doc comment. probe_sdk.js's default path does not use
+ * `ca` at all; it relies on NODE_EXTRA_CA_CERTS (see its module doc comment).
  */
 function buildTrustContext() {
   const customCaPath = (process.env.CAMUNDA_MTLS_CA_PATH || '').trim();

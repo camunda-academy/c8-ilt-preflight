@@ -82,6 +82,11 @@ Replace:
 | TypeScript / Node.js | `typescript` |
 | C# / .NET | `csharp` |
 
+**What to have installed:** for Java, a **JDK 17 or later** — the
+development kit, not just a Java runtime (JRE). For TypeScript, if your
+network uses a proxy, your training contact may ask you to use
+**Node.js 24 (LTS)**.
+
 **Training in Java?** Also add `--maven-depcheck` — this additionally
 confirms your machine can download the training's Java dependencies (a
 separate, common blocker, unrelated to general network connectivity). It

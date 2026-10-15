@@ -9,11 +9,10 @@
  * Env vars:
  *   CAMUNDA_REST_ADDRESS   full cluster REST URL (wins over CAMUNDA_REGION)
  *   CAMUNDA_REGION         region slug, default bru-2
- *   CAMUNDA_MTLS_CA_PATH   extra CA PEM -- the SAME env var name the real
- *       @camunda8/orchestration-cluster-api SDK itself reads (verified in its
- *       own README + source). Unlike Java (whose real client reads a
- *       DIFFERENT name, CAMUNDA_CA_CERTIFICATE_PATH, and needed its own
- *       cross-name mismatch WARN), there is no name trap here.
+ *   CAMUNDA_MTLS_CA_PATH   extra CA PEM (this tool's --trust-ca). The real
+ *       @camunda8/orchestration-cluster-api SDK reads the same name but never
+ *       applies it to its requests -- see probe_sdk.js's module doc comment;
+ *       a real app needs NODE_EXTRA_CA_CERTS, which tier 2 exercises.
  *   HTTPS_PROXY / HTTP_PROXY (or lowercase)   explicit proxy, CONNECT-tunneled
  *
  * Emits one JSON fragment per line on stdout, per target, per the
@@ -21,29 +20,18 @@
  *   {runtime, trustStoreExercised, target, verdict, errorClass, detail}
  *
  * ---------------------------------------------------------------------------
- * CRITICAL, verified against the real SDK's published source (not assumed):
- * when CAMUNDA_MTLS_CA_PATH is set, this probe's custom-CA trust context REPLACES
- * Node's default root store; it does NOT append to it.
+ * Custom-CA semantics: when CAMUNDA_MTLS_CA_PATH is set, this probe passes the
+ * PEM to tls.connect() as `ca`, which per Node's documented
+ * tls.createSecureContext() behavior REPLACES the default root store rather
+ * than extending it -- each target is checked against that CA alone. A PASS
+ * therefore proves the CA by itself vouches for the chain this network
+ * presents, the strict question for a TLS-intercepting proxy.
  *
- * Why: @camunda8/orchestration-cluster-api 9.1.4's own mTLS handling (its
- * published dist/chunk-4NRTES5E.js) builds `new https.Agent({ca: <PEM>})`
- * whenever CAMUNDA_MTLS_CA_PATH/_CA/_CERT_PATH/_KEY_PATH are set -- it does
- * NOT spread Node's own `tls.rootCertificates` into that `ca` value first.
- * Per Node's documented tls.createSecureContext() behavior, supplying `ca`
- * REPLACES the well-known Mozilla-curated default list rather than extending
- * it. (Spreading `[...tls.rootCertificates, customCa]` instead DOES append
- * correctly -- but that is not what the real SDK does, so this probe does
- * not do it either.)
- *
- * The TypeScript SDK's real custom-CA behavior therefore matches Java's
- * (replace), not Go/Python's (append) -- custom-CA semantics differ per
- * runtime and must be read from each SDK's source. Faithfully mirroring the
- * real SDK's REPLACE behavior is required by this tier's whole
- * purpose: exercising the SAME trust store the real SDK uses. A probe that
- * merely appended (like Go/Python do for their own SDKs) would risk a false
- * PASS in exactly the scenario where the real client, having discarded the
- * public CAs, fails to trust the OTHER target (e.g. the OAuth host, if it
- * isn't behind the same TLS-intercepting proxy as the cluster host).
+ * This is NOT how the real SDK picks up a CA. The SDK reads
+ * CAMUNDA_MTLS_CA_PATH and builds an https.Agent from it, but Node's built-in
+ * fetch ignores that agent, so the CA never reaches its requests; a real app
+ * needs NODE_EXTRA_CA_CERTS, which appends to the default store. Tier 2
+ * (probe_sdk.js) exercises that route -- see its module doc comment.
  * ---------------------------------------------------------------------------
  */
 

@@ -35,6 +35,40 @@ Two layers, run together by a single command:
 Every check reports one of `PASS` / `WARN` / `FAIL` / `SKIP`, and the tool
 writes both a human-readable summary and a machine-readable JSON result.
 
+### Behind a proxy
+
+When a proxy is configured (`--proxy`, or `HTTPS_PROXY`/`HTTP_PROXY` with
+`NO_PROXY` respected), Layer 1's TCP, TLS and ALPN stages run through the
+proxy's `CONNECT` tunnel, and the HTTP stages use the same proxy. A proxy
+resolves the target name itself, so a host the local resolver cannot resolve
+is not a dead end there: the `dns` stage becomes a `WARN`
+(`DNS_VIA_PROXY_WARN`) and the remaining stages continue through the proxy.
+If the proxy cannot reach or resolve the host either, that shows up at the
+`tcp` stage (for example a `CONNECT` answered with `502`). Without a proxy, a
+failed lookup is still a `FAIL` that skips the rest.
+
+Layer 2 hands the same proxy and the same custom CA (`--trust-ca`) to each
+runtime in the form that runtime actually reads, because none of them reads
+all of the same settings:
+
+- **Maven** ignores `HTTPS_PROXY` and the JDK's trust settings are separate
+  from the OS store. The Java probe writes a temporary `settings.xml` with
+  `<proxies>` entries for its own Maven runs (credentials are never printed),
+  and gives every `mvn` call a temporary trust store — the JDK's default CAs
+  plus the `--trust-ca` certificate, or the `--java-truststore` file —
+  through `MAVEN_OPTS`. When the proxy URL carries credentials, those runs
+  also use `-Dmaven.resolver.transport=wagon`: with Maven 3.9's default HTTP
+  transport, an authenticating proxy is sent credentials only on the first
+  `CONNECT` tunnel, and the later tunnels a dependency download opens fail
+  with `407`.
+- **The TypeScript SDK** has no proxy handling of its own; it uses Node's
+  built-in `fetch`, which goes through `HTTPS_PROXY` only when Node's
+  built-in proxy support is switched on (`NODE_USE_ENV_PROXY=1`, Node 24+ or
+  22.21+). The probe reports which route the SDK check took. The SDK also
+  does not apply its own `CAMUNDA_MTLS_CA_PATH` to its requests, so the SDK
+  check runs with `NODE_EXTRA_CA_CERTS` set to the `--trust-ca` file — the
+  setting a real application needs as well.
+
 ## Repository layout
 
 ```
@@ -82,6 +116,11 @@ The most commonly used flags:
 | `--auto` | auto-detect installed languages instead of naming them |
 | `--mode` | `network` (credential-free, default) or `full` (authenticated) |
 | `--java-home`, `--python-bin`, `--node-bin`, `--dotnet-bin` | pin a specific runtime installation, for machines with more than one |
+| `--proxy` | explicit proxy URL (`http://user:pass@host:port`, credentials URL-encoded); default: `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` |
+| `--trust-ca` | PEM file of an additional CA to trust (e.g. a TLS-intercepting proxy's root), passed on to every runtime |
+| `--java-truststore` | Java only: a JKS/PKCS12 trust store to use instead of the JDK's `cacerts` |
+| `--maven-depcheck` | Java only: check that the training's Maven dependencies resolve (real downloads, slower) |
+| `--ts-proxy-support` | TypeScript only: route the SDK check through the proxy with an undici `ProxyAgent`, as an app on an older Node would |
 | `--verbose` | show additional diagnostic detail |
 | `--out` | where to write the result JSON |
 
@@ -102,3 +141,12 @@ are, and this table is not guaranteed to stay exhaustive.
   than masked, a client ID is masked, and local file paths / a detected
   proxy's hostname or IP are masked by default (`--unmasked-hostnames` opts
   back in when someone is actively diagnosing a proxy issue).
+- **A probe that checks the real SDK checks it unmodified.** Where an SDK
+  ignores a proxy or a CA setting, the probe does not quietly fix that for
+  itself: it runs the SDK the way an unmodified application would, and says
+  in the result which route and which trust store were actually used, and
+  what an application needs to change.
+- **A missing runtime piece is a finding, not a crash.** For example, a Java
+  runtime (JRE) without `javac` is reported as `FAIL` / `RUNTIME_ABSENT`
+  asking for a JDK (17 or later recommended; the Camunda Spring Boot Starter
+  requires 17), rather than as a crashed probe.

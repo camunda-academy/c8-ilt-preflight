@@ -121,8 +121,19 @@ rc=0
 # --- Tier 2: real SDK confirmation (optional -- probe_sdk.js handles its own
 # opt-in `npm ci` against the committed, hash-verified lockfile; see its
 # module doc comment for the auto-install/SKIP mechanics). ---
+# A custom CA reaches the SDK only through NODE_EXTRA_CA_CERTS: the SDK's own
+# CAMUNDA_MTLS_CA_PATH handling builds an agent that Node's fetch ignores (see
+# probe_sdk.js's module doc comment). Node reads the variable once at startup,
+# so it is set in this one node process's environment -- tier 2 only; tier 1
+# checks the CA by itself through tls.connect. A NODE_EXTRA_CA_CERTS the user
+# already set is kept, not overwritten; probe_sdk.js reports which file it
+# ended up using.
 if [ "$tier2_supported" = "1" ]; then
-  "$NODE" "$DIR/probe_sdk.js" "$@" || rc=1
+  if [ -n "${CAMUNDA_MTLS_CA_PATH:-}" ] && [ -z "${NODE_EXTRA_CA_CERTS:-}" ]; then
+    NODE_EXTRA_CA_CERTS="$CAMUNDA_MTLS_CA_PATH" "$NODE" "$DIR/probe_sdk.js" "$@" || rc=1
+  else
+    "$NODE" "$DIR/probe_sdk.js" "$@" || rc=1
+  fi
 else
   # SKIP, not FAIL: too old a Node is a machine-setup fact, not a network
   # finding, and the fix may be as small as pointing at a newer Node already

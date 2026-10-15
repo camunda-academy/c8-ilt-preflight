@@ -23,7 +23,7 @@ import (
 )
 
 // ToolVersion is overridable at build time via -ldflags "-X main.ToolVersion=x.y.z".
-var ToolVersion = "1.0"
+var ToolVersion = "1.0.1"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -414,20 +414,35 @@ func usesInsecureHTTPClient(name string) bool {
 	return strings.HasPrefix(name, "webcomponent")
 }
 
+// resolveDNS is the dns stage's lookup, a variable so tests can simulate a
+// machine without a working resolver.
+var resolveDNS = checks.ResolveDNS
+
 // runHostStages runs the DNS -> TCP -> TLS -> ALPN -> status sequence for
 // one cluster host family and appends everything to result.
 func runHostStages(ctx context.Context, client *http.Client, rootPool *x509.CertPool, cfg *config.Config, host string, result *model.Result, add func(model.Stage)) {
-	dnsStage := checks.ResolveDNS(ctx, host)
-	add(dnsStage)
-	if dnsStage.Verdict != model.VerdictPass {
-		skipRest(add, host, "tcp", "tls", "alpn", "status")
-		return
-	}
-
 	// Resolve the proxy the same way the HTTP-client stages do, so tcp/tls/
 	// alpn traverse the proxy's CONNECT tunnel when one is configured — the
 	// transport stages and the status/oauth/topology stages now agree.
 	proxy, _ := checks.ResolveProxyForHost("https://"+host, cfg.ProxyURL)
+
+	dnsStage := resolveDNS(ctx, host)
+	if dnsStage.Verdict != model.VerdictPass {
+		if proxy == nil {
+			add(dnsStage)
+			skipRest(add, host, "tcp", "tls", "alpn", "status")
+			return
+		}
+		// A CONNECT proxy resolves the target name itself, so a local lookup
+		// failure doesn't block the proxied path. Downgrade to WARN and keep
+		// going: the stages below show whether the host is actually reachable.
+		dnsStage.Verdict = model.VerdictWarn
+		dnsStage.RemediationCode = model.ErrDNSViaProxyWarn
+		dnsStage.Detail = "the local DNS resolver could not resolve this host; continuing through the proxy, " +
+			"which resolves the name itself. This only matters for applications that connect without the proxy. " +
+			"Local lookup result: " + dnsStage.Detail
+	}
+	add(dnsStage)
 
 	conn, tcpStage := checks.TCPConnect(ctx, host, 443, proxy)
 	add(tcpStage)

@@ -28,6 +28,20 @@ OUT="$DIR/out"
 # an ambient JAVA_HOME -- the launcher already detects a JAVA_HOME-vs-PATH
 # mismatch and warns about it, so honoring it here would duplicate that logic
 # and silently override the runtime the launcher reported.
+#
+# A missing JDK is reported as a FAIL fragment on stdout with errorClass
+# RUNTIME_ABSENT -- the same verdict and class the launcher uses for a runtime
+# that was asked for but is not installed -- not as a bare stderr line, which
+# the launcher can only surface as a crashed probe. Exit 0 after it, like the
+# too-old-JDK SKIP below: the fragment is the result. A JRE is the common case:
+# `java` works, so the launcher detects Java and runs this script, but without
+# javac nothing here can be compiled. No filesystem path in these JSON lines
+# (a path can carry quotes or backslashes, which would break the JSON); the
+# path goes to stderr instead.
+JDK_ADVICE="17 or later recommended; the Camunda Spring Boot Starter requires 17"
+no_jdk_fragment() {
+  echo "{\"runtime\":\"java\",\"trustStoreExercised\":\"\",\"target\":\"jdk\",\"verdict\":\"FAIL\",\"errorClass\":\"RUNTIME_ABSENT\",\"detail\":\"$1\"}"
+}
 if [ -n "${CAMUNDA_JAVA_HOME:-}" ]; then
   JAVAC="$CAMUNDA_JAVA_HOME/bin/javac"
   JAVA="$CAMUNDA_JAVA_HOME/bin/java"
@@ -35,18 +49,40 @@ if [ -n "${CAMUNDA_JAVA_HOME:-}" ]; then
   # Git Bash/MSYS, so no separate .exe branch is needed.
   if [ ! -x "$JAVAC" ]; then
     echo "CAMUNDA_JAVA_HOME is set, but no runnable javac was found at $JAVAC -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested" >&2
-    exit 1
+    if [ -x "$JAVA" ]; then
+      no_jdk_fragment "the Java installation selected with --java-home is a Java runtime, JRE, without a JDK: it has no javac, so the probes cannot be compiled and nothing was checked. Point --java-home at a JDK -- $JDK_ADVICE. The path that was tried is on stderr."
+    else
+      no_jdk_fragment "the Java installation selected with --java-home has neither javac nor java, so nothing was checked. Point --java-home at the folder of a JDK -- the one that contains bin -- $JDK_ADVICE. The path that was tried is on stderr."
+    fi
+    exit 0
   fi
   if [ ! -x "$JAVA" ]; then
     echo "CAMUNDA_JAVA_HOME is set, but no runnable java was found at $JAVA -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested" >&2
-    exit 1
+    no_jdk_fragment "the Java installation selected with --java-home has javac but no java launcher, so nothing was checked. Point --java-home at a complete JDK -- $JDK_ADVICE. The path that was tried is on stderr."
+    exit 0
   fi
 else
   JAVAC=javac
   JAVA=java
-  if ! command -v javac >/dev/null 2>&1 || ! command -v java >/dev/null 2>&1; then
-    echo "java/javac not found on PATH -- a JDK is required (17+ recommended, matching the real Camunda Java SDK)" >&2
-    exit 1
+  # `-version` must actually answer, not just resolve: macOS ships
+  # /usr/bin/java and /usr/bin/javac stubs that exist with no JDK installed and
+  # only print an "unable to locate a Java Runtime" message.
+  if ! command -v javac >/dev/null 2>&1 || ! javac -version >/dev/null 2>&1 \
+      || ! command -v java >/dev/null 2>&1; then
+    if command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1; then
+      # Only the "... version "x.y.z"" line counts (a JAVA_TOOL_OPTIONS banner
+      # can come first), and only digits/dots/underscores are captured, so
+      # nothing else can reach the JSON.
+      jre_ver="$(java -version 2>&1 | sed -n 's/^.* version "\([0-9][0-9._]*\)".*/\1/p' | head -n 1)"
+      jre_desc=""
+      [ -n "$jre_ver" ] && jre_desc=", version $jre_ver,"
+      echo "java found on PATH but no javac -- this is a Java runtime (JRE), not a JDK" >&2
+      no_jdk_fragment "a Java runtime, JRE$jre_desc was found on PATH, but no JDK: javac is missing, so the probes cannot be compiled and nothing was checked. Install a JDK -- $JDK_ADVICE -- or point the check at one already on this machine with --java-home."
+    else
+      echo "java/javac not found on PATH" >&2
+      no_jdk_fragment "no Java found: neither javac nor a working java is on PATH, so nothing was checked. Install a JDK -- $JDK_ADVICE -- or point the check at one already on this machine with --java-home."
+    fi
+    exit 0
   fi
 fi
 
@@ -75,7 +111,7 @@ if [ -n "$jdk_major" ] && [ "$jdk_major" -lt "$MIN_JDK" ]; then
   # backslashes, which are invalid JSON escapes and make the launcher drop the
   # whole fragment. The version substituted in is digits/dots/underscores only,
   # by construction of the sed match above.
-  echo "{\"runtime\":\"java\",\"trustStoreExercised\":\"\",\"target\":\"jdk-version\",\"verdict\":\"SKIP\",\"errorClass\":\"OK\",\"detail\":\"the JDK this check would use is too old: javac reports version $jdk_ver, but Java $MIN_JDK or newer is required to compile the probes, so nothing was checked. Install a newer JDK -- 17 or later matches the real Camunda Java SDK -- or point the check at a newer one already on this machine with --java-home\"}"
+  echo "{\"runtime\":\"java\",\"trustStoreExercised\":\"\",\"target\":\"jdk-version\",\"verdict\":\"SKIP\",\"errorClass\":\"OK\",\"detail\":\"the JDK this check would use is too old: javac reports version $jdk_ver, but Java $MIN_JDK or newer is required to compile the probes, so nothing was checked. Install a newer JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17 -- or point the check at a newer one already on this machine with --java-home\"}"
   exit 0
 fi
 
@@ -91,6 +127,20 @@ if "$JAVAC" -encoding UTF-8 -d "$OUT" "$DIR/Probe.java" "$DIR/Shared.java" 2>&1;
 else
   echo "javac compile of Probe.java failed" >&2
   rc=1
+fi
+
+# --- DepCheck.java (stdlib only) is compiled here, ahead of tier 2, because
+# tier 2's SDK fetch runs through it: `DepCheck --fetch-sdk` hands Maven the
+# proxy and the trust store, which means writing a settings.xml with the proxy
+# password in it and building a keystore. Both happen in Java, not here, so a
+# password containing quotes, & or < can never be misread as markup or shell
+# syntax. Compiled on its own, after tier 1, so a DepCheck compile issue can
+# never take down the MANDATORY trust probe. ---
+depcheck_ok=0
+if "$JAVAC" -encoding UTF-8 -d "$OUT" "$DIR/DepCheck.java" "$DIR/Shared.java" 2>&1; then
+  depcheck_ok=1
+else
+  echo "javac compile of DepCheck.java failed" >&2
 fi
 
 # --- Tier 2: real SDK confirmation (optional -- needs Maven to fetch
@@ -134,7 +184,16 @@ libHasJars() { ls "$SDK_LIB"/*.jar >/dev/null 2>&1; }
 # both into the same SKIP made a broken mirror emit "install Maven and set the
 # flag" -- advice the operator had already followed -- and hid a hard training
 # blocker behind a benign-looking SKIP. Do NOT `|| true` the
-# mvn call: we need its exit status.
+# mvn call: we need its exit status. mvn_failed=2 means the same, but
+# `DepCheck --fetch-sdk` has already emitted the fragment saying so -- with the
+# actual first error, and the proxy retry's outcome -- so nothing is added here.
+#
+# The fetch itself runs through DepCheck --fetch-sdk whenever DepCheck
+# compiled: it tries the operator's own Maven settings first, and when that
+# fails and a proxy is configured, retries once with Maven Central plus that
+# proxy -- Maven reads neither --proxy nor HTTPS_PROXY. It also hands Maven the
+# --trust-ca / --java-truststore trust store. The plain mvn call is the
+# fallback for a DepCheck that did not compile.
 mvn_failed=0
 if ! libHasJars && [ "$auto_install" = "1" ] && command -v mvn >/dev/null 2>&1; then
   mkdir -p "$SDK_LIB"
@@ -150,7 +209,14 @@ if ! libHasJars && [ "$auto_install" = "1" ] && command -v mvn >/dev/null 2>&1; 
 </project>
 POMEOF
   echo "[java sdk-probe] resolving $SDK_SPEC via Maven (first run only, cached after)..." >&2
-  if ! ( cd "$SDK_DIR" && mvn -q -B dependency:copy-dependencies -DoutputDirectory=lib ) >&2; then
+  if [ "$depcheck_ok" = "1" ]; then
+    "$JAVA" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" DepCheck --fetch-sdk "$SDK_DIR"
+    case "$?" in
+      0) ;;
+      2) mvn_failed=2 ;;
+      *) mvn_failed=1 ;;
+    esac
+  elif ! ( cd "$SDK_DIR" && mvn -q -B dependency:copy-dependencies -DoutputDirectory=lib ) >&2; then
     mvn_failed=1
   fi
 fi
@@ -175,6 +241,8 @@ if libHasJars; then
     echo "javac compile of SdkProbe.java failed against resolved classpath" >&2
     rc=1
   fi
+elif [ "$mvn_failed" = "2" ]; then
+  : # already reported by DepCheck --fetch-sdk -- see mvn_failed above
 elif [ "$mvn_failed" = "1" ]; then
   # Maven WAS run and FAILED to resolve -- accurate remediation points at the
   # mirror/network, NOT "install Maven". WARN, not FAIL: this optional SDK tier
@@ -191,15 +259,13 @@ else
 fi
 
 # --- Tier 3: Maven dependency-resolution probe. Stdlib only (no
-# Camunda SDK), compiled on its own -- kept separate from tier 1 so a DepCheck
-# compile issue can never take down the MANDATORY trust probe. It self-gates:
-# emits a SKIP fragment unless opted in (--maven-depcheck / CAMUNDA_MAVEN_DEPCHECK
-# / any --maven-* setting), and only then shells out to Maven. Catches the
-# corporate-mirror case the trust/SDK probes are blind to. ---
-if "$JAVAC" -encoding UTF-8 -d "$OUT" "$DIR/DepCheck.java" "$DIR/Shared.java" 2>&1; then
+# Camunda SDK), compiled above, before tier 2. It self-gates: emits a SKIP
+# fragment unless opted in (--maven-depcheck / CAMUNDA_MAVEN_DEPCHECK / any
+# --maven-* setting), and only then shells out to Maven. Catches the
+# corporate-mirror case the trust/SDK probes are blind to. A failed compile was
+# already reported above. ---
+if [ "$depcheck_ok" = "1" ]; then
   "$JAVA" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$OUT" DepCheck "$@" || rc=1
-else
-  echo "javac compile of DepCheck.java failed" >&2
 fi
 
 exit "$rc"

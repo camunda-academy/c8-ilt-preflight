@@ -20,10 +20,10 @@ import javax.net.ssl.TrustManagerFactory;
  * Layer 2 native trust probe -- Java.
  *
  * Standalone: javac Probe.java Shared.java &amp;&amp; java Probe
- * (no Camunda SDK required -- javax.net.ssl only. The real camunda-client-java
- * SDK requires JDK 17+; this native probe only needs javax.net.ssl, which has
- * been stable since early JDKs, but the training group's JDK 17+ requirement
- * applies regardless since they'll need it for the SDK anyway.)
+ * (no Camunda SDK required -- javax.net.ssl only; compiling the probes needs
+ * JDK 10+. The plain camunda-client-java supports Java 8+, while the Camunda
+ * Spring Boot Starter requires 17+, which is why the run scripts recommend a
+ * JDK 17 or later.)
  *
  * Env vars:
  *   CAMUNDA_REST_ADDRESS         full cluster REST URL (wins over CAMUNDA_REGION)

@@ -72,6 +72,11 @@ const (
 	// The more specific MAVEN_* classes above are reserved for that probe,
 	// which actually isolates the cause.
 	ErrMavenResolveFail ErrorClass = "MAVEN_RESOLVE_FAIL"
+	// ErrDNSViaProxyWarn: the local resolver could not resolve the host, but
+	// a proxy applies to it, so the remaining stages ran through the proxy
+	// (which resolves the name itself). Only a WARN: it affects applications
+	// that bypass the proxy, not the proxied path.
+	ErrDNSViaProxyWarn ErrorClass = "DNS_VIA_PROXY_WARN"
 )
 
 // Mode is the run mode: network (credential-free) or full (authenticated).
@@ -184,7 +189,7 @@ type Result struct {
 	// (which isn't known yet at header-print time, since detection happens
 	// later). Presentation-only: excluded from the persisted JSON (json:"-")
 	// since it's not part of the cross-runtime result schema and adds nothing
-	// the training dashboard needs.
+	// a consumer of the result file needs.
 	StacksRequested string `json:"-"`
 
 	// Verbose mirrors --verbose/CAMUNDA_PREFLIGHT_VERBOSE. Notes() uses it to

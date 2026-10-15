@@ -8,9 +8,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -49,6 +49,18 @@ import java.util.concurrent.TimeUnit;
  *       downloads through it, and Maven executes those jars (see
  *       rejectUnsafeMirror).
  *   CAMUNDA_MAVEN_CENTRAL_ONLY   (1/true/yes) run only the Central baseline.
+ *   HTTPS_PROXY / HTTP_PROXY (or lowercase), NO_PROXY  written as &lt;proxies&gt;
+ *       into the generated Central-baseline settings, since Maven never reads
+ *       these env vars itself. The customer leg keeps the operator's own
+ *       settings -- whether THOSE reach the repositories is what it tests.
+ *   CAMUNDA_CA_CERTIFICATE_PATH / CAMUNDA_MTLS_CA_PATH / CAMUNDA_JAVA_TRUSTSTORE
+ *       handed to every mvn run as a trust store via MAVEN_OPTS (see
+ *       Shared.prepareMavenTrust), so a TLS-intercepting proxy's CA given to
+ *       this tool also reaches Maven.
+ *
+ * Second mode, `DepCheck --fetch-sdk <dir>`: used by run.sh/run.cmd to fetch
+ * the SDK jars for SdkProbe (see fetchSdk). Not opt-in gated -- the run
+ * scripts decide whether to call it.
  *
  * Redaction: a customer settings.xml / mirror URL can carry <server> passwords
  * or user:pass@host. This probe NEVER dumps raw mvn output to stdout -- only a
@@ -78,10 +90,21 @@ public final class DepCheck {
 
   private static final long LEG_TIMEOUT_SECONDS = 240;
 
+  // The SDK fetch shares the launcher's per-stack time budget with the trust
+  // probe and SdkProbe itself, so both attempts together must stay well
+  // inside it.
+  private static final long SDK_FETCH_TIMEOUT_SECONDS = 100;
+  private static final long SDK_RETRY_TIMEOUT_SECONDS = 80;
+
+  /** Exit code of --fetch-sdk when the fetch failed AND this process already
+   * emitted the fragment saying so; the run scripts then add nothing. */
+  static final int FETCH_FAILED_REPORTED = 2;
+
   private static final String USAGE =
       "DepCheck -- Maven dependency-resolution probe.\n"
           + "Opt-in: set CAMUNDA_MAVEN_DEPCHECK=1 (or pass --maven-depcheck). Needs Maven + a JDK.\n"
-          + "Env: CAMUNDA_MAVEN_SETTINGS=<path>, CAMUNDA_MAVEN_MIRROR=<url>, CAMUNDA_MAVEN_CENTRAL_ONLY=1";
+          + "Env: CAMUNDA_MAVEN_SETTINGS=<path>, CAMUNDA_MAVEN_MIRROR=<url>, CAMUNDA_MAVEN_CENTRAL_ONLY=1\n"
+          + "Also: DepCheck --fetch-sdk <dir>  (SDK jar fetch used by run.sh/run.cmd)";
 
   public static void main(String[] args) {
     for (String a : args) {
@@ -91,6 +114,9 @@ public final class DepCheck {
       }
     }
     try {
+      if (args.length == 2 && args[0].equals("--fetch-sdk")) {
+        System.exit(fetchSdk(Paths.get(args[1])));
+      }
       System.exit(run(args));
     } catch (Throwable t) {
       System.out.println(Shared.crashFragment(Shared.describeThrowable(t)));
@@ -137,7 +163,7 @@ public final class DepCheck {
 
     // Confirm this mvn can actually run (a JDK is reachable). Report the chosen
     // mvn + version for the operator.
-    String[] mvnVersion = runProcess(list(mvn, "-v"), 60);
+    String[] mvnVersion = runProcess(list(mvn, "-v"), null, null, 60, false);
     String verExit = mvnVersion[0];
     String verOut = mvnVersion[1];
     if (!verExit.equals("0")) {
@@ -150,8 +176,24 @@ public final class DepCheck {
     }
     System.err.println("[java depcheck] using Maven: " + mvn + " | " + firstLine(verOut));
 
-    Path work = Files.createTempDirectory("c8-depcheck");
+    Shared.MavenTrust trust = null;
+    Path work = null;
     try {
+      trust = Shared.prepareMavenTrust();
+      work = Files.createTempDirectory("c8-depcheck");
+      System.err.println("[java depcheck] Maven trust store: " + trust.label);
+      if (trust.problem != null) {
+        System.out.println(Shared.fragment(
+            "maven-dependency-resolution", "WARN", "CONFIG_ERROR", trust.problem));
+      }
+      Map<String, String> env = trust.env();
+      String proxyUrl = Shared.getProxyUrl();
+      boolean proxied = !Shared.mavenProxiesXmlFromEnv().isEmpty();
+      String centralLabel = proxied
+          ? "Maven Central (through the proxy " + Shared.proxyDisplay(proxyUrl) + ")"
+          : "Maven Central";
+      String trustNote = trustNote(trust);
+
       Path pom = work.resolve("pom.xml");
       Files.write(pom, pomXml().getBytes(StandardCharsets.UTF_8));
 
@@ -162,13 +204,15 @@ public final class DepCheck {
       // line. The label still appears -- in Detail, which has no
       // column-width constraint.
       if (centralOnly) {
-        LegResult central = resolveLeg(mvn, "central", pom, work, centralSettingsArgs(work));
+        LegResult central = resolveLeg(mvn, "central", pom, work, centralSettingsArgs(work), env, trust);
         System.out.println(central.resolved
             ? Shared.fragment("training-deps (baseline)", "PASS", "OK",
-                "all Camunda " + CAMUNDA_VERSION + " training artifacts resolve from Maven Central.")
+                "all Camunda " + CAMUNDA_VERSION + " training artifacts resolve from " + centralLabel + "."
+                    + trustNote)
             : Shared.fragment("training-deps (baseline)", "FAIL",
                 central.errorClass,
-                "cannot resolve the training artifacts from Maven Central -- " + central.detail));
+                "cannot resolve the training artifacts from " + centralLabel + " -- " + central.detail
+                    + trustNote));
         return central.resolved ? 0 : 1;
       }
 
@@ -189,7 +233,7 @@ public final class DepCheck {
       String customerLabel = mirrorUrl.isEmpty()
           ? (settingsPath.isEmpty() ? "your active Maven settings" : "your Maven settings " + settingsPath)
           : "your mirror " + Shared.scrubUrlCreds(mirrorUrl);
-      LegResult customer = resolveLeg(mvn, "customer", pom, work, customerSettings);
+      LegResult customer = resolveLeg(mvn, "customer", pom, work, customerSettings, env, trust);
 
       if (customer.resolved) {
         // Kept short deliberately -- this ends up in the customer-facing
@@ -198,39 +242,83 @@ public final class DepCheck {
         // can't be a stale, cached false-green.
         System.out.println(Shared.fragment(
             "training-deps (customer)", "PASS", "OK",
-            "all Camunda " + CAMUNDA_VERSION + " training artifacts resolve through " + customerLabel + "."));
+            "all Camunda " + CAMUNDA_VERSION + " training artifacts resolve through " + customerLabel + "."
+                + trustNote + ownBuildTrustNote(trust)));
         return 0;
       }
 
+      // The customer leg runs on the operator's own settings, so the proxy
+      // given to this tool never reached it -- Maven does not read
+      // HTTPS_PROXY. Said explicitly whenever a proxy is configured, because
+      // "the proxy works for everything else" is the natural assumption.
+      String proxyNote = "";
+      if (proxyUrl != null) {
+        proxyNote = mirrorUrl.isEmpty()
+            ? " Note: the proxy given to this tool (--proxy / HTTPS_PROXY) is NOT passed to Maven for "
+                + "this check -- Maven never reads HTTPS_PROXY, it only uses a <proxies> entry in its "
+                + "settings.xml (usually ~/.m2/settings.xml). If Maven must go through that proxy, add one "
+                + "there."
+            : " Note: this check contacts the mirror WITHOUT the proxy given to this tool (--proxy / "
+                + "HTTPS_PROXY). If the mirror is only reachable through that proxy, re-run with "
+                + "--maven-settings pointing at a settings.xml that has both the mirror and a <proxies> "
+                + "entry.";
+      }
+
       // Customer leg FAILED -> run the Central baseline to isolate mirror vs network.
-      LegResult central = resolveLeg(mvn, "central", pom, work, centralSettingsArgs(work));
+      LegResult central = resolveLeg(mvn, "central", pom, work, centralSettingsArgs(work), env, trust);
       int rc = 1;
       if (central.resolved) {
-        // Definitive corporate-mirror case: Central serves the same deps, the mirror doesn't.
+        String cause = proxied
+            ? "so the network can reach Maven repositories through that proxy, and the problem is your "
+                + "Maven configuration, NOT the cluster: either it lacks a <proxies> entry for the proxy, or "
+                + "your corporate Maven mirror cannot serve the artifacts. "
+            : "so this is your corporate Maven mirror, NOT the network or the cluster. ";
         System.out.println(Shared.fragment(
             "training-deps (customer)", "FAIL", customer.errorClass,
-            customerLabel + " could NOT resolve the Camunda training artifacts, but Maven CENTRAL "
-                + "resolves the SAME artifacts fine -- so this is your corporate Maven mirror, NOT the "
-                + "network or the cluster. " + customer.detail
-                + " Give your IT/Maven-admin the mirror config; the training build will fail until the "
-                + "mirror can serve io.camunda:*:" + CAMUNDA_VERSION + "."));
+            customerLabel + " could NOT resolve the Camunda training artifacts, but " + centralLabel
+                + " resolves the SAME artifacts fine -- " + cause + customer.detail
+                + (proxied
+                    ? " The training build will fail until " + customerLabel + " can resolve io.camunda:*:"
+                    : " Give your IT/Maven-admin the mirror config; the training build will fail until the "
+                        + "mirror can serve io.camunda:*:")
+                + CAMUNDA_VERSION + "." + proxyNote + trustNote));
         System.out.println(Shared.fragment(
             "training-deps (baseline)", "PASS", "OK",
-            "isolation reference: the same artifacts resolve from Maven Central."));
+            "isolation reference: the same artifacts resolve from " + centralLabel + "."));
       } else {
         // Neither works -> network/proxy blocks Maven repos entirely.
         System.out.println(Shared.fragment(
             "training-deps (customer)", "FAIL", customer.errorClass,
-            customerLabel + " could NOT resolve the Camunda training artifacts. " + customer.detail));
+            customerLabel + " could NOT resolve the Camunda training artifacts. " + customer.detail
+                + proxyNote + trustNote));
         System.out.println(Shared.fragment(
             "training-deps (baseline)", "FAIL", model(central.errorClass),
-            "Maven Central is ALSO unreachable from here -- so this is the network/proxy blocking Maven "
-                + "repositories, not just your mirror. " + central.detail));
+            centralLabel + " is ALSO unreachable from here -- so this is the network/proxy blocking "
+                + "Maven repositories, not just your mirror. " + central.detail));
       }
       return rc;
     } finally {
-      deleteTree(work);
+      Shared.deleteTree(work);
+      if (trust != null) {
+        trust.cleanup();
+      }
     }
+  }
+
+  /** " Maven ran with ... as its trust store." when this check handed Maven a
+   * trust store of its own, else "" -- the default needs no mention. */
+  private static String trustNote(Shared.MavenTrust trust) {
+    return trust.isCustom() ? " Maven ran with " + trust.label + " as its trust store." : "";
+  }
+
+  /** A PASS that relied on a trust store this check handed Maven says nothing
+   * about the operator's own builds, which run without it. */
+  private static String ownBuildTrustNote(Shared.MavenTrust trust) {
+    return trust.isCustom()
+        ? " Your own Maven builds need the same CA: import it into the cacerts of the JDK Maven runs on "
+            + "(keytool -importcert -cacerts), or point MAVEN_OPTS at a trust store with "
+            + "-Djavax.net.ssl.trustStore."
+        : "";
   }
 
   /** Central-leg errorClass is always a Central-unreachable flavor regardless of
@@ -252,8 +340,8 @@ public final class DepCheck {
     }
   }
 
-  private static LegResult resolveLeg(String mvn, String leg, Path pom, Path work, List<String> settingsArgs)
-      throws Exception {
+  private static LegResult resolveLeg(String mvn, String leg, Path pom, Path work, List<String> settingsArgs,
+      Map<String, String> env, Shared.MavenTrust trust) throws Exception {
     // Throwaway local repo per leg -- the whole point: forces a real fetch
     // every run so a warm ~/.m2 cache can't mask a broken remote.
     Path repo = work.resolve("repo-" + leg);
@@ -261,24 +349,151 @@ public final class DepCheck {
         "dependency:go-offline", "-Dmaven.repo.local=" + repo.toString());
     cmd.addAll(settingsArgs);
 
-    String[] res = runProcess(cmd, LEG_TIMEOUT_SECONDS);
+    String[] res = runProcess(cmd, null, env, LEG_TIMEOUT_SECONDS, false);
     boolean ok = res[0].equals("0");
     if (ok) {
       return new LegResult(true, "OK", "");
     }
     boolean central = leg.equals("central");
     String errorClass = classify(res[1], central);
-    String reason = firstErrorLine(res[1]);
-    return new LegResult(false, errorClass, reason.isEmpty() ? "" : "First error: " + reason);
+    String reason = failureReason(res);
+    return new LegResult(false, errorClass,
+        (reason.isEmpty() ? "" : "First error: " + reason) + pkixHint(res[1], trust)
+            + (central ? "" : Shared.mavenProxyAuthHint(res[1])));
+  }
+
+  /** Extra guidance when Maven failed on certificate trust: the JDK's PKIX
+   * message alone does not say that a TLS-intercepting proxy is the usual
+   * cause, nor that --trust-ca reaches Maven too. */
+  static String pkixHint(String output, Shared.MavenTrust trust) {
+    String t = output == null ? "" : output.toLowerCase(Locale.ROOT);
+    if (!t.contains("pkix") && !t.contains("unable to find valid certification path")) {
+      return "";
+    }
+    return trust.isCustom()
+        ? " Maven did not trust a TLS certificate it was shown, even with " + trust.label
+            + " -- check that this is the root CA the intercepting proxy actually signs with."
+        : " Maven did not trust a TLS certificate it was shown -- typical behind a TLS-intercepting "
+            + "proxy. Re-run with --trust-ca <the proxy's root CA, PEM>: this check then hands Maven that "
+            + "CA in addition to the JDK's default ones.";
   }
 
   private static List<String> centralSettingsArgs(Path work) throws IOException {
     // Clean settings with NO mirrors, forced as BOTH user (-s) and global (-gs)
-    // settings so a machine-global mirror can't sneak in -- a true Central baseline.
+    // settings so a machine-global mirror can't sneak in -- a true Central
+    // baseline. The proxy from HTTPS_PROXY/HTTP_PROXY is written in as
+    // <proxies>: Maven ignores those env vars, so without this the baseline
+    // would always fail on a network whose only way out is that proxy.
     Path clean = work.resolve("central-settings.xml");
-    Files.write(clean, ("<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\">"
-        + "<mirrors></mirrors><profiles></profiles></settings>").getBytes(StandardCharsets.UTF_8));
-    return list("-s", clean.toString(), "-gs", clean.toString());
+    Files.write(clean, Shared.centralSettingsXml(Shared.mavenProxiesXmlFromEnv())
+        .getBytes(StandardCharsets.UTF_8));
+    List<String> args = list("-s", clean.toString(), "-gs", clean.toString());
+    args.addAll(Shared.mavenProxyAuthTransportArgs());
+    return args;
+  }
+
+  /** --fetch-sdk: copies camunda-client-java and its dependencies into
+   * &lt;dir&gt;/lib for SdkProbe, from the pom.xml the run script wrote there.
+   *
+   * <p>First attempt: the operator's own Maven settings, as their real builds
+   * resolve. If that fails and a proxy is configured (HTTPS_PROXY/HTTP_PROXY,
+   * which is how the launcher forwards --proxy), one retry with plain Maven
+   * Central settings plus that proxy: Maven does not read the env vars, so on
+   * a network whose only way out is that proxy the first attempt cannot work
+   * unless the operator's settings.xml already names it. A retry that
+   * succeeds is still reported (WARN), because the operator's own builds will
+   * keep failing the way the first attempt did.
+   *
+   * <p>Both attempts get the trust store from Shared.prepareMavenTrust.
+   * Maven's output goes to stderr only. Returns 0 when the jars were fetched,
+   * FETCH_FAILED_REPORTED when not (the fragment saying so is already on
+   * stdout). */
+  static int fetchSdk(Path sdkDir) throws Exception {
+    String mvn = findMvnOnPath();
+    if (mvn == null) {
+      mvn = Shared.isWindows() ? "mvn.cmd" : "mvn";
+    }
+    String coord = "io.camunda:camunda-client-java:" + CAMUNDA_VERSION;
+    Shared.MavenTrust trust = null;
+    Path work = null;
+    try {
+      trust = Shared.prepareMavenTrust();
+      System.err.println("[java sdk-probe] Maven trust store: " + trust.label);
+      if (trust.problem != null) {
+        System.out.println(Shared.fragment(
+            "maven-dependency-resolution", "WARN", "CONFIG_ERROR", trust.problem));
+      }
+      Map<String, String> env = trust.env();
+      List<String> base = list(mvn, "-q", "-B", "dependency:copy-dependencies", "-DoutputDirectory=lib");
+
+      String[] first = runProcess(base, sdkDir, env, SDK_FETCH_TIMEOUT_SECONDS, true);
+      if (first[0].equals("0")) {
+        return 0;
+      }
+      String firstError = failureReason(first);
+      String trustNote = trustNote(trust);
+      String notMissingMaven = "Maven is installed and ran but could NOT resolve " + coord
+          + " -- this is NOT a missing-Maven problem.";
+
+      String proxyUrl = Shared.getProxyUrl();
+      String proxiesXml = Shared.mavenProxiesXmlFromEnv();
+      if (proxiesXml.isEmpty()) {
+        String unusable = proxyUrl == null ? "" : " The proxy URL from --proxy / HTTPS_PROXY could not "
+            + "be read as host:port, so no retry through it was attempted.";
+        System.out.println(Shared.fragment(
+            "maven-dependency-resolution", "WARN", "MAVEN_RESOLVE_FAIL",
+            notMissingMaven + " Likely a corporate Maven mirror such as Nexus or Artifactory that cannot "
+                + "serve the Camunda artifacts -- missing, stale, or 401 -- or a proxy blocking Maven "
+                + "Central. This blocks building the training exercises regardless of cluster "
+                + "connectivity." + (firstError.isEmpty() ? "" : " First error: " + firstError)
+                + pkixHint(first[1], trust) + unusable + trustNote
+                + " See the mvn output on stderr; run the dedicated Maven dependency-resolution check "
+                + "(--maven-depcheck) to isolate Central vs mirror."));
+        return FETCH_FAILED_REPORTED;
+      }
+
+      String scrubbedProxy = Shared.proxyDisplay(proxyUrl);
+      work = Shared.createMavenTempDir("c8-sdk-fetch");
+      Path settings = work.resolve("settings.xml");
+      Files.write(settings, Shared.centralSettingsXml(proxiesXml).getBytes(StandardCharsets.UTF_8));
+      System.err.println("[java sdk-probe] Maven could not resolve with your own settings; retrying once "
+          + "with plain Maven Central settings through the proxy " + scrubbedProxy + "...");
+      List<String> retry = new ArrayList<>(base);
+      retry.addAll(list("-s", settings.toString(), "-gs", settings.toString()));
+      retry.addAll(Shared.mavenProxyAuthTransportArgs());
+      String[] second = runProcess(retry, sdkDir, env, SDK_RETRY_TIMEOUT_SECONDS, true);
+
+      String withOwnSettings = (firstError.isEmpty() ? "" : " First error with your settings: " + firstError)
+          + Shared.mavenProxyAuthHint(first[1]);
+      if (second[0].equals("0")) {
+        System.out.println(Shared.fragment(
+            "maven-dependency-resolution", "WARN", "MAVEN_RESOLVE_FAIL",
+            "Maven could NOT resolve " + coord + " with your own Maven settings; it only worked after this "
+                + "tool gave Maven the proxy " + scrubbedProxy + " together with plain Maven Central "
+                + "settings. Maven never reads --proxy or HTTPS_PROXY, so your own builds -- including the "
+                + "training exercises -- will fail the same way until your settings.xml (usually "
+                + "~/.m2/settings.xml) has a <proxies> entry for this proxy, or your corporate mirror is "
+                + "reachable." + withOwnSettings + trustNote));
+        return 0;
+      }
+      String secondError = failureReason(second);
+      System.out.println(Shared.fragment(
+          "maven-dependency-resolution", "WARN", "MAVEN_RESOLVE_FAIL",
+          notMissingMaven + " It failed with your own Maven settings, AND again with plain Maven Central "
+              + "settings through the proxy " + scrubbedProxy + " -- so the proxy does not let Maven reach "
+              + "Maven Central either: it may block or require other credentials for "
+              + "repo.maven.apache.org, or intercept TLS with a CA Maven does not trust. This blocks "
+              + "building the training exercises regardless of cluster connectivity." + withOwnSettings
+              + (secondError.isEmpty() ? "" : " First error through the proxy: " + secondError)
+              + pkixHint(first[1] + "\n" + second[1], trust) + trustNote
+              + " See the mvn output on stderr."));
+      return FETCH_FAILED_REPORTED;
+    } finally {
+      Shared.deleteTree(work);
+      if (trust != null) {
+        trust.cleanup();
+      }
+    }
   }
 
   /** Rejects a CAMUNDA_MAVEN_MIRROR value that must not be pointed at.
@@ -374,12 +589,10 @@ public final class DepCheck {
   // ---- Maven discovery (PATH, MAVEN_HOME/M2_HOME, project ./mvnw) ----
 
   private static String findMvn() {
-    boolean win = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    boolean win = Shared.isWindows();
     // 1. PATH
-    String[] onPath = win ? new String[] {"mvn.cmd", "mvn.bat", "mvn"} : new String[] {"mvn"};
-    for (String c : onPath) {
-      if (canRun(c)) return c;
-    }
+    String onPath = findMvnOnPath();
+    if (onPath != null) return onPath;
     // 2. MAVEN_HOME / M2_HOME
     for (String envName : new String[] {"MAVEN_HOME", "M2_HOME"}) {
       String home = Shared.envOrEmpty(envName);
@@ -395,9 +608,18 @@ public final class DepCheck {
     return null;
   }
 
+  /** The Maven on PATH, as the run scripts' own `mvn` lookup finds it. */
+  private static String findMvnOnPath() {
+    String[] onPath = Shared.isWindows() ? new String[] {"mvn.cmd", "mvn.bat", "mvn"} : new String[] {"mvn"};
+    for (String c : onPath) {
+      if (canRun(c)) return c;
+    }
+    return null;
+  }
+
   private static boolean canRun(String cmd) {
     try {
-      String[] r = runProcess(list(cmd, "-v"), 60);
+      String[] r = runProcess(list(cmd, "-v"), null, null, 60, false);
       return r[0].equals("0");
     } catch (Exception e) {
       return false;
@@ -413,10 +635,22 @@ public final class DepCheck {
   // ---- process + fs helpers ----
 
   /** Runs a command, merging stderr into stdout. Returns {exitCodeAsString, output}.
-   * A timeout or spawn failure returns a non-"0" exit and an explanatory output. */
-  private static String[] runProcess(List<String> cmd, long timeoutSeconds) throws Exception {
+   * A timeout or spawn failure returns a non-"0" exit and an explanatory output.
+   *
+   * <p>dir: working directory (null = inherit). env: variables to set on top
+   * of the inherited environment (null/empty = none). echoToStderr: also
+   * stream the output to this process's stderr as it arrives -- stdout is the
+   * fragment channel, so child output must never reach it. */
+  private static String[] runProcess(List<String> cmd, Path dir, Map<String, String> env, long timeoutSeconds,
+      boolean echoToStderr) throws Exception {
     ProcessBuilder pb = new ProcessBuilder(cmd);
     pb.redirectErrorStream(true);
+    if (dir != null) {
+      pb.directory(dir.toFile());
+    }
+    if (env != null) {
+      pb.environment().putAll(env);
+    }
     Process p;
     try {
       p = pb.start();
@@ -430,6 +664,10 @@ public final class DepCheck {
         int n;
         while ((n = in.read(b)) != -1) {
           buf.write(b, 0, n);
+          if (echoToStderr) {
+            System.err.write(b, 0, n);
+            System.err.flush();
+          }
         }
       } catch (IOException ignored) {
       }
@@ -438,6 +676,10 @@ public final class DepCheck {
     reader.start();
     boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
     if (!finished) {
+      // mvn is a launcher script (mvn.cmd / a shell script) that starts the
+      // real JVM as a child, so killing only the direct child would leave
+      // Maven itself running.
+      p.descendants().forEach(ProcessHandle::destroyForcibly);
       p.destroyForcibly();
       reader.join(2000);
       return new String[] {"124", "timed out after " + timeoutSeconds + "s\n"
@@ -458,6 +700,16 @@ public final class DepCheck {
     if (s == null) return "";
     int nl = s.indexOf('\n');
     return Shared.scrubUrlCreds((nl < 0 ? s : s.substring(0, nl)).trim());
+  }
+
+  /** Why a runProcess result failed, for a fragment detail: a timeout said as
+   * such (a killed mvn leaves no [ERROR] line to quote), else the first mvn
+   * error line. */
+  private static String failureReason(String[] res) {
+    if (res[0].equals("124")) {
+      return firstLine(res[1]).replace("timed out", "Maven did not finish, timed out");
+    }
+    return firstErrorLine(res[1]);
   }
 
   /** First line that looks like an mvn error, scrubbed of any credentials. */
@@ -510,7 +762,7 @@ public final class DepCheck {
     sb.append("<settings xmlns=\"http://maven.apache.org/SETTINGS/1.0.0\">");
     sb.append("<mirrors><mirror>");
     sb.append("<id>c8-explicit-mirror</id><name>c8-explicit</name>");
-    sb.append("<url>").append(xmlEscape(mirrorUrl)).append("</url><mirrorOf>*</mirrorOf>");
+    sb.append("<url>").append(Shared.xmlEscape(mirrorUrl)).append("</url><mirrorOf>*</mirrorOf>");
     sb.append("</mirror></mirrors>");
     sb.append("<profiles><profile><id>c8-strict-checksums</id>");
     sb.append("<repositories>");
@@ -535,25 +787,6 @@ public final class DepCheck {
         + "<snapshots><enabled>false</enabled><checksumPolicy>fail</checksumPolicy></snapshots>"
         + "<url>https://repo.maven.apache.org/maven2</url>"
         + "</" + element + ">";
-  }
-
-  private static String xmlEscape(String s) {
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
-  }
-
-  private static void deleteTree(Path dir) {
-    if (dir == null) return;
-    try {
-      Files.walk(dir)
-          .sorted(Comparator.reverseOrder())
-          .forEach(p -> {
-            try {
-              Files.deleteIfExists(p);
-            } catch (IOException ignored) {
-            }
-          });
-    } catch (IOException ignored) {
-    }
   }
 
   private DepCheck() {}

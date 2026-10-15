@@ -57,35 +57,48 @@
  *   (from probe.js) still cover the mandatory trust check either way.
  *
  * ---------------------------------------------------------------------------
- * Trust-store nuance, verified against the SDK's own published source
- * (dist/chunk-4NRTES5E.js in the 9.1.4 tarball), NOT assumed: with no custom
- * CA/mTLS material configured, the SDK calls Node's global `fetch` (undici)
- * with no custom Agent at all -- i.e. Node's own built-in root certificates,
- * the SAME default probe.js's tier-1 check uses. Once CAMUNDA_MTLS_CA_PATH
- * (or the sibling _CA/_CERT_PATH/_KEY_PATH vars) are set, the SDK builds
- * `new https.Agent({ca: ...})` and attaches it to every outbound call
- * (including OAuth token fetches) -- REPLACING the default root store, not
- * appending (see probe.js's module doc comment for the full verified
- * reasoning, including a live empirical test). This SDK's real custom-CA
- * behavior matches Java's real client, not Go/Python's.
+ * Trust-store nuance, read from the SDK's own published source
+ * (dist/chunk-4NRTES5E.js in the 9.1.4 tarball): every request goes through
+ * `opts.fetch ?? globalThis.fetch`, i.e. Node's built-in fetch (undici), which
+ * verifies against Node's default root certificates plus whatever
+ * NODE_EXTRA_CA_CERTS added at process start.
  *
- * Env-var-name note: unlike Java (whose real client reads a DIFFERENT name,
- * CAMUNDA_CA_CERTIFICATE_PATH, than this tool's own CAMUNDA_MTLS_CA_PATH
- * convention -- needing its own cross-name mismatch WARN), the real
- * TypeScript SDK reads CAMUNDA_MTLS_CA_PATH directly. No name-mismatch WARN
- * is needed for this language.
+ * The SDK's OWN custom-CA setting does not take effect. When
+ * CAMUNDA_MTLS_CA_PATH (or the sibling _CA/_CERT_PATH/_KEY_PATH vars) is set,
+ * the SDK builds `new https.Agent({ca, cert, key})` and passes it to fetch as
+ * `{agent}` -- but `agent` is a node:https option that Node's built-in fetch
+ * does not know and silently ignores. The CA (and any client certificate) is
+ * therefore never applied: behind a TLS-intercepting proxy the SDK's requests
+ * fail certificate verification exactly as if CAMUNDA_MTLS_CA_PATH were unset.
  *
- * Proxy-support note (see installProxyDispatcher's own doc comment for the
- * full story): the SDK has ZERO built-in HTTP(S)_PROXY handling -- absent
- * from its source, and observably so: pointing HTTPS_PROXY at a dead port,
- * both raw fetch() and this SDK's own getStatus() still succeed with a real
- * response instead of a connection error. By DEFAULT this probe mirrors that exactly -- a configured --proxy
- * is silently bypassed, same as an unmodified real application using this
- * SDK would experience. --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT opts
- * into routing through the proxy instead, via undici's own official
- * `ProxyAgent` + `setGlobalDispatcher` (the same fix a real customer
- * engineering team should apply to their own application -- three lines of
- * setup, no custom HTTP client needed).
+ * What does work for a real application is NODE_EXTRA_CA_CERTS, which Node
+ * reads once at startup and APPENDS to its default root store for every TLS
+ * connection, fetch included. So this check exercises that route: run.sh/
+ * run.cmd start this file with NODE_EXTRA_CA_CERTS set to CAMUNDA_MTLS_CA_PATH
+ * (unless the environment already carries its own NODE_EXTRA_CA_CERTS, which
+ * is then left alone -- Node accepts a single file, and silently replacing the
+ * user's choice would test a setup they don't have). Whenever a custom CA is
+ * configured, this probe also emits a config note telling the user that
+ * CAMUNDA_MTLS_CA_PATH alone does nothing for this SDK and NODE_EXTRA_CA_CERTS
+ * is what their app needs. probe.js's tier-1 handshake is a separate thing: it
+ * passes the CA straight to tls.connect({ca}), which does apply it.
+ *
+ * Proxy-support note (see installProxyDispatcher's and detectNodeEnvProxy's
+ * doc comments for the details): the SDK has no proxy handling of its own --
+ * it never reads HTTP(S)_PROXY. Whether its requests go through a proxy is
+ * decided entirely by the fetch underneath it:
+ *  - By default Node's fetch ignores HTTP(S)_PROXY and connects direct, so an
+ *    unmodified app bypasses a configured --proxy. This probe mirrors that and
+ *    WARNs that a PASS did not go through the proxy.
+ *  - With Node's built-in proxy support switched on (NODE_USE_ENV_PROXY=1, or
+ *    --use-env-proxy on the command line or in NODE_OPTIONS -- Node 22.21+ or
+ *    24+), Node's fetch routes through HTTP(S)_PROXY, NO_PROXY respected, and
+ *    so does the unmodified SDK. This probe then runs the SDK untouched and
+ *    reports the check as having gone through the proxy.
+ *  - --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT installs undici's own
+ *    `ProxyAgent` as the global dispatcher for this check -- the in-code fix
+ *    an app on an older Node would apply. It takes precedence over Node's
+ *    built-in proxy support when both are on.
  *
  * Auth-strategy auto-upgrade gap (the Python SDK has an equivalent gap by a
  * different mechanism, same risk): this
@@ -110,6 +123,7 @@ const {
   clusterEdgeDetail,
   crashFragment,
   eprint,
+  errorChain,
   fragment,
   getProxyUrl,
   hasClusterTarget,
@@ -178,20 +192,102 @@ function installSdk() {
   }
 }
 
+// Node versions whose built-in fetch can route through HTTP(S)_PROXY on
+// request: NODE_USE_ENV_PROXY=1 since 24.0.0 and 22.21.0, the --use-env-proxy
+// flag (command line or NODE_OPTIONS) since 24.5.0 and 22.21.0. The odd-numbered
+// 23.x line never got it.
+const ENV_PROXY_NODE_VERSIONS = 'Node.js 22.21+ or 24+';
+
+function nodeSupportsEnvProxy(viaFlag) {
+  const [major, minor] = process.versions.node.split('.').map((n) => parseInt(n, 10));
+  if (major >= 25) return true;
+  if (major === 24) return !viaFlag || minor >= 5;
+  if (major === 22) return minor >= 21;
+  return false;
+}
+
+// The last --use-env-proxy / --no-use-env-proxy in an argument list (Node lets
+// the later one win), as true/false, or null when neither appears.
+function lastEnvProxyFlag(args) {
+  let value = null;
+  for (const a of args) {
+    if (a === '--use-env-proxy') value = true;
+    else if (a === '--no-use-env-proxy') value = false;
+  }
+  return value;
+}
+
+/**
+ * Whether Node's built-in proxy support is switched on for THIS process --
+ * when it is, Node's own fetch (and with it the unmodified SDK) routes through
+ * HTTP(S)_PROXY, honoring NO_PROXY.
+ *
+ * Must run before anything replaces the global dispatcher. Two signals:
+ *  - what was requested: a --use-env-proxy/--no-use-env-proxy flag (command
+ *    line beats NODE_OPTIONS, and either beats the variable), else
+ *    NODE_USE_ENV_PROXY, which Node honors only with the exact value "1";
+ *  - what Node actually did: at startup it installs an EnvHttpProxyAgent as
+ *    undici's global dispatcher (shared across undici copies through a
+ *    well-known global symbol) whenever the feature is on and a proxy
+ *    variable is set.
+ * Either one counting as active keeps the answer right if a future Node
+ * renames the class, and a version too old for the feature still reads as
+ * requested-but-inactive.
+ */
+function detectNodeEnvProxy() {
+  const fromArgv = lastEnvProxyFlag(process.execArgv);
+  const fromOptions = lastEnvProxyFlag((process.env.NODE_OPTIONS || '').split(/\s+/));
+  const flag = fromArgv !== null ? fromArgv : fromOptions;
+  const envValue = (process.env.NODE_USE_ENV_PROXY || '').trim();
+
+  let requested;
+  let via;
+  if (flag !== null) {
+    requested = flag;
+    via = '--use-env-proxy';
+  } else {
+    requested = envValue === '1';
+    via = 'NODE_USE_ENV_PROXY=1';
+  }
+
+  const dispatcher = globalThis[Symbol.for('undici.globalDispatcher.1')];
+  const installed = !!(dispatcher && dispatcher.constructor && dispatcher.constructor.name === 'EnvHttpProxyAgent');
+  const active = installed || (requested && nodeSupportsEnvProxy(flag !== null));
+  return { requested, active, via, envValue, flagDisabled: flag === false };
+}
+
+/**
+ * Whether NO_PROXY/no_proxy exempts host from the proxy, using the same rules
+ * as Node's built-in proxy support: comma- or space-separated entries, "*"
+ * matches everything, an entry matches the host itself and its subdomains
+ * (a leading "." or "*." is optional), and a ":port" suffix is ignored here
+ * since every request this probe makes goes to 443.
+ */
+function noProxyExcludes(host) {
+  const raw = process.env.no_proxy || process.env.NO_PROXY || '';
+  const h = host.toLowerCase();
+  for (let entry of raw.split(/[,\s]+/)) {
+    entry = entry.trim().toLowerCase();
+    if (!entry) continue;
+    if (entry === '*') return true;
+    entry = entry.replace(/:\d+$/, '').replace(/^\*?\./, '');
+    if (h === entry || h.endsWith('.' + entry)) return true;
+  }
+  return false;
+}
+
 /**
  * Points Node's global `fetch` (and therefore the SDK's default HTTP client,
  * which just calls `globalThis.fetch` -- see the module doc comment) through
  * an HTTP(S) proxy, using undici's own official `ProxyAgent` +
  * `setGlobalDispatcher` -- NOT a hand-written HTTP client.
  *
- * WHY THIS EXISTS: the real SDK's own HTTP client (Node's global
- * `fetch`/undici) does NOT honor HTTP_PROXY/HTTPS_PROXY at all -- absent
- * from its source, and observably so: pointing HTTPS_PROXY at a dead port
- * that nothing listens on, both raw fetch() and the SDK's own getStatus()
- * still succeed with a real response instead of a connection error -- so
- * when `--proxy` is set, this probe's own tier-1
- * native check correctly tunnels through it while tier 2 silently bypassed
- * the proxy entirely and connected straight to the real internet.
+ * WHY THIS EXISTS: the real SDK has no proxy handling, and Node's global
+ * `fetch` ignores HTTP_PROXY/HTTPS_PROXY unless Node's built-in proxy support
+ * is switched on (see detectNodeEnvProxy) -- which needs a recent Node. On
+ * any Node without it, the SDK silently bypasses the proxy and connects
+ * straight to the internet; this dispatcher is the in-code fix that works
+ * regardless of Node version.
  *
  * WHY `undici`'s ProxyAgent: `undici` is the same library Node's OWN global
  * fetch is built on, and it ships an official `ProxyAgent` dispatcher for
@@ -201,8 +297,8 @@ function installSdk() {
  * `lib/dispatcher/proxy-agent.js`: `username`/`password` parsed straight off
  * the proxy URL) -- none of which a hand-rolled CONNECT tunnel + minimal
  * HTTP/1.1 client would give without tight coupling to this SDK's current
- * request shape. It is also the exact fix a real customer engineering team
- * would apply to their own application -- three lines
+ * request shape. It is also the exact fix an engineering team on an older
+ * Node would apply to their own application -- three lines
  * (`setGlobalDispatcher(new ProxyAgent(...))`), no custom code -- so this
  * probe exercises the SAME real-world remediation instead of a bespoke
  * workaround.
@@ -249,16 +345,191 @@ function classifySdkFailure(target, e, storeLabel, stage) {
       storeLabel
     );
   }
+  // A proxy that refuses the CONNECT (through Node's built-in proxy support or
+  // --ts-proxy-support's ProxyAgent) surfaces as an undici error whose message
+  // carries "Proxy response (<status>)" -- no error code that the generic
+  // transport classification would recognize.
+  const proxyMatch = errorChain(e)
+    .map((x) => (x && x.message) || '')
+    .join(' | ')
+    .match(/proxy response \((\d{3})\)/i);
+  if (proxyMatch) {
+    if (proxyMatch[1] === '407') {
+      return fragment(
+        target,
+        'FAIL',
+        'PROXY_AUTH_407',
+        'authenticated corporate proxy in path rejected the request (407) -- put the proxy user name and ' +
+          'password in the proxy URL (--proxy/HTTPS_PROXY) as its user-info part, with special characters such as ' +
+          '@ : & URL-encoded (Basic auth only), or ask IT to exempt these hosts.',
+        storeLabel
+      );
+    }
+    return fragment(target, 'FAIL', 'CONNECT_REFUSED', 'proxy CONNECT tunnel failed: proxy answered HTTP ' + proxyMatch[1], storeLabel);
+  }
   const [errorClass, detail] = classifyTransportError(e && e.cause ? e.cause : e);
   return fragment(target, 'FAIL', errorClass, detail, storeLabel);
 }
 
-async function runChecks(sdkModule) {
+/**
+ * Decides how this check's requests travel when a proxy is configured, and
+ * returns { route, notes, restoreDispatcher } -- route is a short phrase for
+ * PASS details, notes are config fragments to emit. Installs
+ * --ts-proxy-support's ProxyAgent when that path wins (restoreDispatcher then
+ * puts the previous dispatcher back); Node's built-in proxy support needs
+ * nothing installed, since the dispatcher Node set up at startup already
+ * routes the SDK's fetch through the proxy.
+ */
+function resolveProxyRoute(host, proxyUrl, envProxy, trust) {
+  const result = { route: '', notes: [], restoreDispatcher: null };
+  if (!proxyUrl) return result;
+  const nodeVersion = 'v' + process.versions.node;
+  const configTarget = host + ' (config)';
+
+  if (tsProxySupportEnabled()) {
+    eprint('[typescript sdk-probe] using proxy (via undici ProxyAgent, opted in via --ts-proxy-support): ' + maskProxy(proxyUrl));
+    if (envProxy.active) {
+      eprint(
+        "[typescript sdk-probe] Node's built-in proxy support (" + envProxy.via + ') is on as well -- ' +
+          "--ts-proxy-support's ProxyAgent replaces it for this check"
+      );
+    }
+    result.restoreDispatcher = installProxyDispatcher(proxyUrl, trust);
+    result.route = "via your proxy (--ts-proxy-support's undici ProxyAgent)";
+    return result;
+  }
+
+  if (envProxy.active) {
+    if (noProxyExcludes(host)) {
+      eprint("[typescript sdk-probe] Node's built-in proxy support is on, but NO_PROXY exempts " + host + ' -- connecting DIRECT');
+      result.route = 'DIRECT (NO_PROXY exempts this host) -- your proxy was NOT used';
+      result.notes.push(
+        fragment(
+          configTarget,
+          'WARN',
+          'CONFIG_ERROR',
+          "Node's built-in proxy support is on (" + envProxy.via + '), but NO_PROXY/no_proxy exempts ' + host +
+            ', so the real TypeScript SDK connected DIRECT -- a PASS below did NOT go through your proxy ' +
+            '(--proxy/HTTPS_PROXY). Your app behaves the same way with this environment; remove the host from ' +
+            'NO_PROXY if it must go through the proxy.'
+        )
+      );
+      return result;
+    }
+    eprint("[typescript sdk-probe] using proxy (via Node's built-in proxy support, " + envProxy.via + '): ' + maskProxy(proxyUrl));
+    result.route = "via your proxy (Node's built-in proxy support, " + envProxy.via + ')';
+    return result;
+  }
+
+  eprint(
+    '[typescript sdk-probe] a proxy is configured but ' +
+      (envProxy.requested
+        ? "Node's built-in proxy support (" + envProxy.via + ') needs ' + ENV_PROXY_NODE_VERSIONS + ', this is ' + nodeVersion
+        : "neither Node's built-in proxy support nor --ts-proxy-support is on") +
+      " -- this check will connect DIRECT, bypassing the proxy (matches the real SDK's own default behavior)"
+  );
+  result.route = 'DIRECT -- your proxy was NOT used';
+  const fixes =
+    'An app (and this check) goes through the proxy with either fix: set NODE_USE_ENV_PROXY=1 in the ' +
+    "environment the app starts with (Node's built-in proxy support, " + ENV_PROXY_NODE_VERSIONS +
+    '; this check ran on Node.js ' + nodeVersion + '), or install an undici ProxyAgent as the global ' +
+    'dispatcher in the app -- pass --ts-proxy-support to have this check do the same.';
+  let detail;
+  if (envProxy.requested) {
+    detail =
+      "Node's built-in proxy support was requested (" + envProxy.via + '), but this Node.js (' + nodeVersion +
+      ') predates it -- it needs ' + ENV_PROXY_NODE_VERSIONS + ' -- so Node ignores the setting and the real ' +
+      'TypeScript SDK connected DIRECT, bypassing your proxy (--proxy/HTTPS_PROXY). A PASS below did NOT go ' +
+      'through your proxy. Upgrade Node.js (or point this check at a newer one with --node-bin), or pass ' +
+      '--ts-proxy-support to route this check through an undici ProxyAgent instead.';
+  } else {
+    detail =
+      'A proxy is configured (--proxy/HTTPS_PROXY), but the real TypeScript SDK has no proxy support of its own: ' +
+      "it uses Node's built-in fetch, which ignores HTTPS_PROXY unless Node's built-in proxy support is switched " +
+      'on. This check therefore connected DIRECT, exactly as an unmodified app would -- a PASS below did NOT go ' +
+      'through your proxy. ' + fixes;
+    if (envProxy.flagDisabled) {
+      detail += ' (--no-use-env-proxy is set, which switches the built-in support off.)';
+    } else if (envProxy.envValue && envProxy.envValue !== '1') {
+      detail += ' (NODE_USE_ENV_PROXY is set to "' + envProxy.envValue + '", but Node only honors the exact value 1.)';
+    }
+  }
+  result.notes.push(fragment(configTarget, 'WARN', 'CONFIG_ERROR', detail));
+  return result;
+}
+
+/**
+ * The trust store the SDK's requests are actually verified against, and --
+ * whenever a custom CA is configured -- a config note explaining that the
+ * SDK's own CAMUNDA_MTLS_CA_PATH is not applied and what a real app must use
+ * instead. See the module doc comment's trust-store nuance.
+ */
+function resolveSdkTrust(host, trust, viaProxyAgent) {
+  const customCaPath = (process.env.CAMUNDA_MTLS_CA_PATH || '').trim();
+  const extraCaPath = (process.env.NODE_EXTRA_CA_CERTS || '').trim();
+
+  let label;
+  if (viaProxyAgent && trust.ca) {
+    // installProxyDispatcher hands the CA to the ProxyAgent as requestTls.ca,
+    // which replaces the default store for the tunneled connection.
+    label = trust.label;
+  } else if (extraCaPath) {
+    label = 'the default certificate store plus NODE_EXTRA_CA_CERTS (' + extraCaPath + ')';
+  } else {
+    label = 'the default certificate store';
+  }
+
+  // Only when the configured CA was actually readable -- an unreadable path
+  // already gets its own WARN from buildTrustContext.
+  if (!customCaPath || !trust.ca) return { label, note: null, info: '' };
+
+  // The expected case -- the CA reached the SDK the way a real app has to load
+  // it -- is not a problem to flag, so it rides along in the check's detail
+  // instead of a separate WARN line. The other cases below stay WARNs: there
+  // the CA the user passed was not, or may not have been, applied.
+  if (extraCaPath === customCaPath) {
+    let info =
+      '(Custom CA loaded via NODE_EXTRA_CA_CERTS. The SDK does not apply its own CAMUNDA_MTLS_CA_PATH to its ' +
+      'requests, so your app needs NODE_EXTRA_CA_CERTS=<CA PEM> set when node starts.';
+    if (viaProxyAgent) {
+      info += ' With --ts-proxy-support the CA is also passed to the ProxyAgent as requestTls.ca, trusting only that CA.';
+    }
+    return { label, note: null, info: info + ')' };
+  }
+
+  const why =
+    'The TypeScript SDK does read CAMUNDA_MTLS_CA_PATH and builds an https.Agent from it, but it hands that agent ' +
+    "to Node's built-in fetch, which ignores it -- so the CA is never applied to the SDK's requests, and behind a " +
+    'TLS-intercepting proxy they fail certificate verification as if it were unset. What works in a real app is ' +
+    'NODE_EXTRA_CA_CERTS=<path to the CA PEM> in the environment the node process STARTS with (Node reads it only ' +
+    'at startup and adds it to its default certificate store); CAMUNDA_MTLS_CA_PATH alone has no effect.';
+  let how;
+  if (extraCaPath) {
+    how =
+      'NODE_EXTRA_CA_CERTS is already set in your environment (' + extraCaPath + '), so this check kept it and did ' +
+      'NOT add your --trust-ca/CAMUNDA_MTLS_CA_PATH certificate (' + customCaPath + '): Node loads only one ' +
+      'NODE_EXTRA_CA_CERTS file. If that file does not contain the CA you passed, combine both into one PEM file ' +
+      'and point NODE_EXTRA_CA_CERTS at it.';
+  } else {
+    how =
+      'This check ran WITHOUT your custom CA (--trust-ca/CAMUNDA_MTLS_CA_PATH), exactly like an app relying on ' +
+      'that variable: NODE_EXTRA_CA_CERTS is not set (run.sh/run.cmd set it for this check; running probe_sdk.js ' +
+      'directly does not).';
+  }
+  if (viaProxyAgent) {
+    how +=
+      " With --ts-proxy-support this check also passes the CA to its ProxyAgent as requestTls.ca, which trusts ONLY " +
+      'that CA for the cluster connection -- as an app that installs its own ProxyAgent with that option would.';
+  }
+  return { label, note: fragment(host + ' (config)', 'WARN', 'CONFIG_ERROR', how + ' ' + why), info: '' };
+}
+
+async function runChecks(sdkModule, envProxy) {
   const { createCamundaClient } = sdkModule;
   const fragments = [];
   const trust = buildTrustContext();
-  const storeLabel = trust.label;
   if (trust.warn) fragments.push(trust.warn);
+  let storeLabel = trust.label;
 
   if (!hasClusterTarget()) {
     fragments.push(fragment(
@@ -277,35 +548,23 @@ async function runChecks(sdkModule) {
   // which applies to this SDK too.
   const { restBase, host, wasNormalized } = normalizeRestBase();
 
-  // See installProxyDispatcher's doc comment: the real SDK's own fetch
-  // ignores HTTP_PROXY/HTTPS_PROXY entirely, so without it a configured
-  // --proxy is silently bypassed here while tier 1 correctly tunnels through
-  // it -- not a bug, the DEFAULT here deliberately mirrors the real,
-  // unmodified SDK exactly (a training group's own job-worker code gets the same
-  // proxy-blind behavior out of the box, unless THEY also apply this same
-  // fix). --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT opts into the tunneled
-  // check instead, at the cost of no longer testing the real SDK's own
-  // (nonexistent) proxy handling.
+  // The SDK itself never reads HTTP(S)_PROXY; the route is whatever the fetch
+  // underneath it does (see the module doc comment's proxy-support note). With
+  // neither Node's built-in proxy support nor --ts-proxy-support on, this
+  // check deliberately mirrors the unmodified SDK and connects direct -- an
+  // app gets the same proxy-blind behavior out of the box -- and says so.
   const proxyUrl = getProxyUrl();
-  const proxySupportEnabled = tsProxySupportEnabled();
-  let restoreDispatcher = null;
-  if (proxyUrl && proxySupportEnabled) {
-    eprint('[typescript sdk-probe] using proxy (via undici ProxyAgent, opted in via --ts-proxy-support): ' + maskProxy(proxyUrl));
-    restoreDispatcher = installProxyDispatcher(proxyUrl, trust);
-  } else if (proxyUrl) {
-    eprint('[typescript sdk-probe] a proxy is configured but --ts-proxy-support is not set -- this check will connect DIRECT, bypassing the proxy (matches the real SDK\'s own default behavior)');
-    fragments.push(
-      fragment(
-        host + ' (config)',
-        'WARN',
-        'CONFIG_ERROR',
-        'A proxy is configured (--proxy/HTTPS_PROXY) but --ts-proxy-support/CAMUNDA_TS_PROXY_SUPPORT is not set. The ' +
-          "real TypeScript SDK's own fetch has no proxy support at all (confirmed from source) and connects direct -- " +
-          'this check mirrors that default exactly, so a PASS below did NOT go through your proxy. Pass ' +
-          '--ts-proxy-support to route this check through the proxy instead.'
-      )
-    );
-  }
+  const { route, notes: proxyNotes, restoreDispatcher } = resolveProxyRoute(host, proxyUrl, envProxy, trust);
+  fragments.push(...proxyNotes);
+  const routeSuffix = route ? ' ' + route : '';
+
+  const sdkTrust = resolveSdkTrust(host, trust, restoreDispatcher !== null);
+  storeLabel = sdkTrust.label;
+  if (sdkTrust.note) fragments.push(sdkTrust.note);
+  const withTrustInfo = (frag) => {
+    if (sdkTrust.info) frag.detail += ' ' + sdkTrust.info;
+    return frag;
+  };
 
   if (wasNormalized && isVerbose()) {
     fragments.push(
@@ -370,9 +629,9 @@ async function runChecks(sdkModule) {
     const statusTarget = host + ' (sdk status)';
     try {
       await client.getStatus({ signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-      fragments.push(fragment(statusTarget, 'PASS', 'OK', 'SDK getStatus() succeeded', storeLabel));
+      fragments.push(withTrustInfo(fragment(statusTarget, 'PASS', 'OK', 'SDK getStatus() succeeded' + routeSuffix, storeLabel)));
     } catch (e) {
-      fragments.push(classifySdkFailure(statusTarget, e, storeLabel, 'status'));
+      fragments.push(withTrustInfo(classifySdkFailure(statusTarget, e, storeLabel, 'status')));
     }
 
     // getTopology() is the authenticated, FULL-MODE-ONLY analog. In network
@@ -398,7 +657,7 @@ async function runChecks(sdkModule) {
         const topo = await client.getTopology({ signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
         const brokerCount = topo && Array.isArray(topo.brokers) ? topo.brokers.length : '?';
         fragments.push(
-          fragment(topologyTarget, 'PASS', 'OK', 'SDK getTopology() succeeded, ' + brokerCount + ' broker(s)', storeLabel)
+          fragment(topologyTarget, 'PASS', 'OK', 'SDK getTopology() succeeded, ' + brokerCount + ' broker(s)' + routeSuffix, storeLabel)
         );
       } catch (e) {
         fragments.push(classifySdkFailure(topologyTarget, e, storeLabel, 'topology'));
@@ -417,6 +676,10 @@ async function main() {
     eprint(USAGE);
     return 0;
   }
+
+  // Read before anything else can touch undici's global dispatcher -- see
+  // detectNodeEnvProxy.
+  const envProxy = detectNodeEnvProxy();
 
   if (!sdkResolvable()) {
     if (!autoInstallEnabled()) {
@@ -479,7 +742,7 @@ async function main() {
     process.stdout.write = realWrite;
   }
 
-  const fragments = await runChecks(sdkModule);
+  const fragments = await runChecks(sdkModule, envProxy);
   let exitCode = 0;
   for (const frag of fragments) {
     console.log(JSON.stringify(frag));

@@ -57,17 +57,57 @@ if defined CAMUNDA_JAVA_HOME (
 )
 goto :jdkResolved
 
+rem The labels below report a missing JDK as a FAIL fragment on stdout with
+rem errorClass RUNTIME_ABSENT -- the same verdict and class the launcher uses
+rem for a runtime that was asked for but is not installed -- not as a bare
+rem stderr line, which the launcher can only surface as a crashed probe. Exit 0
+rem after it, like the too-old-JDK SKIP below: the fragment is the result. A JRE
+rem is the common case: `java` works, so the launcher detects Java and runs this
+rem script, but without javac nothing here can be compiled.
+rem
+rem No filesystem path in these JSON lines: a Windows path carries literal
+rem backslashes, which are invalid JSON escapes and make the launcher drop the
+rem whole fragment. The path goes to stderr instead.
 :pinNoJavac
 echo CAMUNDA_JAVA_HOME is set, but no javac.exe was found at !JAVAC! -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested 1>&2
-exit /b 1
+if exist "!JAVA!" (
+  echo {"runtime":"java","trustStoreExercised":"","target":"jdk","verdict":"FAIL","errorClass":"RUNTIME_ABSENT","detail":"the Java installation selected with --java-home is a Java runtime, JRE, without a JDK: it has no javac, so the probes cannot be compiled and nothing was checked. Point --java-home at a JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17. The path that was tried is on stderr."}
+) else (
+  echo {"runtime":"java","trustStoreExercised":"","target":"jdk","verdict":"FAIL","errorClass":"RUNTIME_ABSENT","detail":"the Java installation selected with --java-home has neither javac nor java, so nothing was checked. Point --java-home at the folder of a JDK -- the one that contains bin -- 17 or later recommended; the Camunda Spring Boot Starter requires 17. The path that was tried is on stderr."}
+)
+exit /b 0
 
 :pinNoJava
 echo CAMUNDA_JAVA_HOME is set, but no java.exe was found at !JAVA! -- refusing to fall back to the PATH JDK, which would check a different installation and a different trust store than the one requested 1>&2
-exit /b 1
+echo {"runtime":"java","trustStoreExercised":"","target":"jdk","verdict":"FAIL","errorClass":"RUNTIME_ABSENT","detail":"the Java installation selected with --java-home has javac but no java launcher, so nothing was checked. Point --java-home at a complete JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17. The path that was tried is on stderr."}
+exit /b 0
 
 :noJdkOnPath
-echo java/javac not found on PATH -- a JDK is required ^(17+ recommended, matching the real Camunda Java SDK^) 1>&2
-exit /b 1
+rem `java -version` must actually answer, not just exist: only then is this a
+rem usable JRE rather than a leftover launcher stub.
+where java >nul 2>nul
+if not !ERRORLEVEL!==0 goto :noJavaOnPath
+java -version >nul 2>nul
+if not !ERRORLEVEL!==0 goto :noJavaOnPath
+rem The JRE's version, for the detail. Only the line whose second token is
+rem "version" counts -- a JAVA_TOOL_OPTIONS banner can come first -- and only a
+rem value made of digits, dots and underscores is used, so nothing else can
+rem reach the JSON below.
+set "JRE_VER="
+for /f "usebackq tokens=2,3" %%A in (`java -version 2^>^&1`) do if "%%A"=="version" if not defined JRE_VER set "JRE_VER=%%~B"
+set "JRE_DESC="
+if defined JRE_VER (
+  echo !JRE_VER!|findstr /r /c:"^[0-9][0-9._]*$" >nul
+  if !ERRORLEVEL!==0 set "JRE_DESC=, version !JRE_VER!,"
+)
+echo java found on PATH but no javac -- this is a Java runtime, JRE, not a JDK 1>&2
+echo {"runtime":"java","trustStoreExercised":"","target":"jdk","verdict":"FAIL","errorClass":"RUNTIME_ABSENT","detail":"a Java runtime, JRE!JRE_DESC! was found on PATH, but no JDK: javac is missing, so the probes cannot be compiled and nothing was checked. Install a JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17 -- or point the check at one already on this machine with --java-home."}
+exit /b 0
+
+:noJavaOnPath
+echo java/javac not found on PATH 1>&2
+echo {"runtime":"java","trustStoreExercised":"","target":"jdk","verdict":"FAIL","errorClass":"RUNTIME_ABSENT","detail":"no Java found: neither javac nor a working java is on PATH, so nothing was checked. Install a JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17 -- or point the check at one already on this machine with --java-home."}
+exit /b 0
 
 :jdkResolved
 
@@ -103,7 +143,7 @@ if defined JDK_MAJOR (
     rem launcher drop the whole fragment, and an unescaped '(' / ')' breaks echo
     rem inside a parenthesized block. The version substituted in is
     rem digits/dots/underscores only, by construction of the parse above.
-    echo {"runtime":"java","trustStoreExercised":"","target":"jdk-version","verdict":"SKIP","errorClass":"OK","detail":"the JDK this check would use is too old: javac reports version !JDK_VER!, but Java !MIN_JDK! or newer is required to compile the probes, so nothing was checked. Install a newer JDK -- 17 or later matches the real Camunda Java SDK -- or point the check at a newer one already on this machine with --java-home"}
+    echo {"runtime":"java","trustStoreExercised":"","target":"jdk-version","verdict":"SKIP","errorClass":"OK","detail":"the JDK this check would use is too old: javac reports version !JDK_VER!, but Java !MIN_JDK! or newer is required to compile the probes, so nothing was checked. Install a newer JDK -- 17 or later recommended; the Camunda Spring Boot Starter requires 17 -- or point the check at a newer one already on this machine with --java-home"}
     exit /b 0
   )
 )
@@ -123,6 +163,22 @@ if %ERRORLEVEL%==0 (
 ) else (
   echo javac compile of Probe.java failed 1>&2
   set RC=1
+)
+
+rem --- DepCheck.java (stdlib only) is compiled here, ahead of tier 2, because
+rem tier 2's SDK fetch runs through it: `DepCheck --fetch-sdk` hands Maven the
+rem proxy and the trust store, which means writing a settings.xml with the proxy
+rem password in it and building a keystore. Both happen in Java, not here: a
+rem proxy password may contain & % ! " or <, and no amount of escaping makes
+rem echoing such a value into XML from batch safe. Compiled on its own, after
+rem tier 1, so a DepCheck compile issue can never take down the MANDATORY trust
+rem probe. ---
+set DEPCHECK_OK=0
+"!JAVAC!" -encoding UTF-8 -d "%OUT%" "%DIR%DepCheck.java" "%DIR%Shared.java"
+if !ERRORLEVEL!==0 (
+  set DEPCHECK_OK=1
+) else (
+  echo javac compile of DepCheck.java failed 1>&2
 )
 
 rem --- Tier 2: real SDK confirmation (optional -- needs Maven to fetch
@@ -171,7 +227,17 @@ rem broken/misconfigured corporate mirror or a proxy blocking Central) from
 rem "Maven wasn't run at all" (absent / not opted in). Collapsing both into the
 rem same SKIP would make a broken mirror emit "install Maven and set the flag"
 rem -- advice the operator has already followed -- and hide a hard training
-rem blocker behind a benign-looking SKIP.
+rem blocker behind a benign-looking SKIP. MVN_FAILED=2 means the same, but
+rem `DepCheck --fetch-sdk` has already emitted the fragment saying so -- with
+rem the actual first error, and the proxy retry's outcome -- so nothing is
+rem added here.
+rem
+rem The fetch itself runs through DepCheck --fetch-sdk whenever DepCheck
+rem compiled: it tries the operator's own Maven settings first, as before, and
+rem when that fails and a proxy is configured, retries once with Maven Central
+rem plus that proxy -- Maven reads neither --proxy nor HTTPS_PROXY. It also
+rem hands Maven the --trust-ca / --java-truststore trust store. The plain mvn
+rem call is the fallback for a DepCheck that did not compile.
 set MVN_FAILED=0
 if not exist "%SDK_LIB%\*.jar" if "%AUTO_INSTALL%"=="1" (
   where mvn >nul 2>nul
@@ -189,10 +255,20 @@ if not exist "%SDK_LIB%\*.jar" if "%AUTO_INSTALL%"=="1" (
       echo ^</project^>
     ) > "%SDK_DIR%\pom.xml"
     echo [java sdk-probe] resolving io.camunda:camunda-client-java:8.9.15 via Maven ^(first run only, cached after^)... 1>&2
-    pushd "%SDK_DIR%"
-    call mvn -q -B dependency:copy-dependencies -DoutputDirectory=lib 1>&2
-    if not !ERRORLEVEL!==0 set MVN_FAILED=1
-    popd
+    if "!DEPCHECK_OK!"=="1" (
+      "!JAVA!" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "%OUT%" DepCheck --fetch-sdk "%SDK_DIR%"
+      set "FETCH_RC=!ERRORLEVEL!"
+      if "!FETCH_RC!"=="2" (
+        set MVN_FAILED=2
+      ) else if not "!FETCH_RC!"=="0" (
+        set MVN_FAILED=1
+      )
+    ) else (
+      pushd "%SDK_DIR%"
+      call mvn -q -B dependency:copy-dependencies -DoutputDirectory=lib 1>&2
+      if not !ERRORLEVEL!==0 set MVN_FAILED=1
+      popd
+    )
   )
 )
 
@@ -205,6 +281,9 @@ if exist "%SDK_LIB%\*.jar" (
     echo javac compile of SdkProbe.java failed against resolved classpath 1>&2
     set RC=1
   )
+) else if "!MVN_FAILED!"=="2" (
+  rem Already reported by DepCheck --fetch-sdk -- see MVN_FAILED above.
+  set MVN_FAILED=2
 ) else if "!MVN_FAILED!"=="1" (
   rem Maven WAS run and FAILED to resolve -- accurate remediation points at the
   rem mirror/network, NOT "install Maven". WARN, not FAIL: this optional SDK tier
@@ -224,17 +303,14 @@ if exist "%SDK_LIB%\*.jar" (
   echo {"runtime":"java","trustStoreExercised":"","target":"sdk","verdict":"SKIP","errorClass":"OK","detail":"camunda-client-java not resolved, so the real Java SDK was not exercised. The automatic fetch needs Maven on PATH -- install Maven and re-run, or drop the SDK jars into sdk/lib/ yourself. If you passed --no-sdk-install, or set CAMUNDA_SDK_AUTO_INSTALL=0, re-run without it to fetch the SDK automatically."}
 )
 
-rem --- Tier 3: Maven dependency-resolution probe. Stdlib only,
-rem compiled on its own -- kept separate from tier 1 so a DepCheck compile issue
-rem can never take down the MANDATORY trust probe. Self-gates: emits SKIP unless
-rem opted in (--maven-depcheck / CAMUNDA_MAVEN_DEPCHECK / any --maven-* setting),
-rem and only then shells out to Maven. ---
-"!JAVAC!" -encoding UTF-8 -d "%OUT%" "%DIR%DepCheck.java" "%DIR%Shared.java"
-if !ERRORLEVEL!==0 (
+rem --- Tier 3: Maven dependency-resolution probe. Stdlib only, compiled
+rem above, before tier 2. Self-gates: emits SKIP unless opted in
+rem (--maven-depcheck / CAMUNDA_MAVEN_DEPCHECK / any --maven-* setting), and
+rem only then shells out to Maven. A failed compile was already reported
+rem above. ---
+if "!DEPCHECK_OK!"=="1" (
   "!JAVA!" -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "%OUT%" DepCheck %*
   if not !ERRORLEVEL!==0 set RC=1
-) else (
-  echo javac compile of DepCheck.java failed 1>&2
 )
 
 exit /b %RC%

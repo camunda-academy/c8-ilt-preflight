@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ReleasesDir = Join-Path $ScriptDir "..\releases"
-$Version = if ($env:PREFLIGHT_VERSION) { $env:PREFLIGHT_VERSION } else { "1.0" }
+$Version = if ($env:PREFLIGHT_VERSION) { $env:PREFLIGHT_VERSION } else { "1.0.1" }
 
 New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
 Set-Location $ScriptDir
@@ -26,7 +26,7 @@ foreach ($t in $Targets) {
     $env:CGO_ENABLED = "0"
     $env:GOOS = $t.GOOS
     $env:GOARCH = $t.GOARCH
-    & go build -ldflags "-s -w -X main.ToolVersion=$Version" -o (Join-Path $ReleasesDir $out) ./cmd/preflight
+    & go build -trimpath -ldflags "-s -w -X main.ToolVersion=$Version" -o (Join-Path $ReleasesDir $out) ./cmd/preflight
 }
 Remove-Item Env:GOOS, Env:GOARCH, Env:CGO_ENABLED -ErrorAction SilentlyContinue
 
